@@ -6,67 +6,86 @@ import requests
 st.set_page_config(page_title="OSRS F2P Dip Bot", layout="centered")
 
 st.title("📊 OSRS F2P Dip Trading Bot")
-st.write("Sinyal *trading* otomatis khusus F2P (Modal 58k GP, 3 Slot) berbasis analisis penurunan harga (*price dip*).")
+st.write("Sinyal *trading* otomatis khusus F2P berbasis analisis penurunan harga (*price dip*).")
 
-# Tombol untuk memperbarui data secara manual dari HP
-if st.button("🔄 Perbarui Data Pasar"):
+# ==========================================
+# FITUR INPUT MODAL BEBAS OLEH PENGGUNA
+# ==========================================
+st.sidebar.header("⚙️ Pengaturan Modal GE")
+total_modal = st.sidebar.number_input(
+    "Masukkan Total Modal Anda (GP):", 
+    min_value=1000, 
+    value=100000,  # Default modal baru Anda (100k)
+    step=5000,
+    format="%d",
+    help="Modal ini akan dibagi rata ke 3 slot aktif Grand Exchange."
+)
+
+# Hitung modal per slot (dibagi 3 slot GE)
+modal_per_slot = total_modal / 3
+st.sidebar.info(f"💰 Modal per Slot (3 Slot): **{modal_per_slot:,.0f} GP**")
+
+if st.sidebar.button("🔄 Perbarui & Pindai Pasar"):
     st.rerun()
 
-@st.cache_data(ttl=60) # Menyimpan cache data selama 60 detik agar aman dari limit API Wiki
-def load_trading_signals():
+# Fungsi untuk mengambil data pasar dari API Wiki
+@st.cache_data(ttl=60)
+def fetch_market_data():
     headers = {'User-Agent': 'Belajar_Data_Analisis_Bot_Lokal'}
-    
     try:
-        # 1. Tarik Data MAPPING (Filter khusus F2P)
         req_map = requests.get('https://prices.runescape.wiki/api/v1/osrs/mapping', headers=headers)
         df_map = pd.DataFrame(req_map.json())[['id', 'name', 'limit', 'members']]
         df_map = df_map[df_map['members'] == False]
         df_map.rename(columns={'name': 'mappingname', 'limit': 'mappinglimit'}, inplace=True)
 
-        # 2. Tarik Data 1 Jam (Basis Harga Jam Lalu / Recency)
         req_1h = requests.get('https://prices.runescape.wiki/api/v1/osrs/1h', headers=headers)
         df_1h = pd.DataFrame.from_dict(req_1h.json()['data'], orient='index').reset_index()
         df_1h.rename(columns={'index': 'id', 'avgLowPrice': 'Hourly_Low', 'lowPriceVolume': 'H_VolLow'}, inplace=True)
 
-        # 3. Tarik Data 24 Jam (Basis Historis & Volume Harian)
         req_24h = requests.get('https://prices.runescape.wiki/api/v1/osrs/24h', headers=headers)
         df_24h = pd.DataFrame.from_dict(req_24h.json()['data'], orient='index').reset_index()
         df_24h.rename(columns={'index': 'id', 'avgLowPrice': 'Daily_Low', 'avgHighPrice': 'Daily_High', 'lowPriceVolume': 'D_VolLow'}, inplace=True)
 
-        # 4. Tarik Data LATEST (Harga Real-Time Detik Ini)
         req_latest = requests.get('https://prices.runescape.wiki/api/v1/osrs/latest', headers=headers)
         df_latest = pd.DataFrame.from_dict(req_latest.json()['data'], orient='index').reset_index()
         df_latest.rename(columns={'index': 'id', 'low': 'Live_Low', 'high': 'Live_High'}, inplace=True)
 
-        # Bersihkan ID dari NaN dan jadikan integer aman
         for df in [df_1h, df_24h, df_latest, df_map]:
             df['id'] = pd.to_numeric(df['id'], errors='coerce').fillna(0).astype(int)
 
-        # Gabungkan data
         master = df_1h.merge(df_24h, on='id').merge(df_latest, on='id').merge(df_map, on='id', how='inner')
         
-        # Konversi kolom harga dan volume menjadi numerik agar tidak error
-        for col in ['Hourly_Low', 'Live_Low', 'Daily_Low', 'Daily_High', 'D_VolLow', 'mappinglimit']:
+        for col in ['Hourly_Low', 'Live_Low', 'Daily_Low', 'Daily_High', 'D_VolLow', 'H_VolLow', 'mappinglimit']:
             if col in master.columns:
                 master[col] = pd.to_numeric(master[col], errors='coerce').fillna(0)
 
-        # Kalkulasi Pajak: Barang < 100 GP Bebas Pajak, di atasnya 2%
         master['Tax'] = master['Hourly_Low'].apply(lambda x: 0 if x < 100 else round((x * 0.02) - 0.5))
-        
-        # Filter Logika: Dip tipis (0.5%), Cek Historis, Anti Zombi, Volume Raksasa
-        filtered = master[
-            (master['Live_Low'] > 0) & 
-            (master['Hourly_Low'] > (master['Live_Low'] * 1.005)) & 
-            (((master['Daily_Low'] + master['Daily_High']) / 2.0) > master['Live_Low']) & 
-            ((master['Hourly_Low'] - master['Live_Low'] - master['Tax']) > 0) & 
-            (master['D_VolLow'] > 200) & 
-            (master['Daily_High'] > master['Daily_Low'])
+        return master
+    except Exception as e:
+        st.error(f"Gagal mengambil data API: {e}")
+        return pd.DataFrame()
+
+# Ambil data pasar
+with st.spinner('Memindai data pasar OSRS...'):
+    master_data = fetch_market_data()
+
+if not master_data.empty:
+    
+    # Fungsi pemroses sinyal agar bisa digunakan untuk Sebelum & Sesudah
+    def process_signals(df, threshold_multiplier, min_d_vol, sort_by_volume_score=False):
+        filtered = df[
+            (df['Live_Low'] > 0) & 
+            (df['Hourly_Low'] > (df['Live_Low'] * threshold_multiplier)) & 
+            (((df['Daily_Low'] + df['Daily_High']) / 2.0) > df['Live_Low']) & 
+            ((df['Hourly_Low'] - df['Live_Low'] - df['Tax']) > 0) & 
+            (df['D_VolLow'] > min_d_vol) & 
+            (df['H_VolLow'] > 2) & 
+            (df['Daily_High'] > df['Daily_Low'])
         ].copy()
 
         if filtered.empty:
             return pd.DataFrame()
 
-        # Kalkulasi Modal 58k GP terbagi 3 slot (~19.333 GP per slot) secara aman dari NaN
         filtered['Untung_Per_Biji'] = filtered['Hourly_Low'] - filtered['Live_Low'] - filtered['Tax']
         
         def safe_calc_qty(row):
@@ -74,43 +93,62 @@ def load_trading_signals():
             limit = row['mappinglimit']
             if price <= 0:
                 return 0
-            max_afford = 19333 / price
-            # Jika limit ada dan valid, ambil nilai terkecil antara limit dan kemampuan beli
+            max_afford = modal_per_slot / price
             if limit > 0:
                 return int(min(limit, max_afford))
             return int(max_afford)
 
         filtered['Beli_Berapa_Biji'] = filtered.apply(safe_calc_qty, axis=1)
+        filtered = filtered[filtered['Beli_Berapa_Biji'] > 0].copy()
+        
+        if filtered.empty:
+            return pd.DataFrame()
+
         filtered['Total_Untung_Slot'] = filtered['Untung_Per_Biji'] * filtered['Beli_Berapa_Biji']
         filtered['ROI_Persen'] = (filtered['Untung_Per_Biji'] / filtered['Live_Low']) * 100
         
-        # Urutkan berdasarkan Skor Likuiditas (Untung x Volume Harian)
-        filtered['Skor'] = filtered['Untung_Per_Biji'] * filtered['D_VolLow']
-        result = filtered.sort_values(by='Skor', ascending=False).head(3)
+        # Pengurutan (Sorting)
+        if sort_by_volume_score:
+            filtered['Skor'] = filtered['Untung_Per_Biji'] * filtered['D_VolLow']
+            result = filtered.sort_values(by='Skor', ascending=False).head(3)
+        else:
+            result = filtered.sort_values(by='Total_Untung_Slot', ascending=False).head(3)
         
-        # Ubah nama kolom agar mudah dibaca di HP
         result = result.rename(columns={
             'mappingname': 'Nama Barang',
             'Live_Low': 'Harga Beli (Live)',
             'Hourly_Low': 'Harga Jual (Normal)',
             'Beli_Berapa_Biji': 'Jumlah Beli',
             'Total_Untung_Slot': 'Proyeksi Untung',
-            'ROI_Persen': 'ROI (%)'
+            'ROI_Persen': 'ROI (%)',
+            'D_VolLow': 'Vol Harian'
         })
         
-        return result[['Nama Barang', 'Harga Beli (Live)', 'Harga Jual (Normal)', 'Jumlah Beli', 'Proyeksi Untung', 'ROI (%)']]
-        
-    except Exception as e:
-        st.error(f"Gagal memuat data pasar: {e}")
-        return pd.DataFrame()
+        return result[['Nama Barang', 'Harga Beli (Live)', 'Harga Jual (Normal)', 'Jumlah Beli', 'Proyeksi Untung', 'ROI (%)', 'Vol Harian']]
 
-# Eksekusi dan Tampilkan Laporan di Web
-with st.spinner('Sedang memindai pasar OSRS...'):
-    df_result = load_trading_signals()
+    # ==========================================
+    # TAMPILAN 1: SEBELUM DILONGGARKAN (Ketat > 2%)
+    # ==========================================
+    st.subheader("📌 Top 3 Sebelum Dilonggarkan (Anjlokan Ekstrem > 2%)")
+    df_sebelum = process_signals(master_data, threshold_multiplier=1.02, min_d_vol=5, sort_by_volume_score=False)
+    if not df_sebelum.empty:
+        st.dataframe(df_sebelum, use_container_width=True)
+    else:
+        st.warning("Tidak ada item yang memenuhi kriteria ketat (> 2% drop) saat ini.")
 
-if not df_result.empty:
-    st.success("Sinyal Selesai Dimuat!")
-    st.dataframe(df_result, use_container_width=True)
-    st.info("💡 **Panduan Eksekusi di Grand Exchange:**\n- Pasang **Buy Offer** di harga kolom **Harga Beli (Live)**.\n- Setelah terbeli, pasang **Sell Offer** di harga kolom **Harga Jual (Normal)**.")
+    st.divider()
+
+    # ==========================================
+    # TAMPILAN 2: SESUDAH DILONGGARKAN (Tipis > 0.5% + Prioritas Volume)
+    # ==========================================
+    st.subheader("📌 Top 3 Sesudah Dilonggarkan (Turun Tipis > 0.5% + Prioritas Volume)")
+    df_sesudah = process_signals(master_data, threshold_multiplier=1.005, min_d_vol=200, sort_by_volume_score=True)
+    if not df_sesudah.empty:
+        st.dataframe(df_sesudah, use_container_width=True)
+    else:
+        st.warning("Tidak ada item yang memenuhi kriteria longgar ber-volume tinggi saat ini.")
+
+    st.info(f"💡 Kalkulasi ini menggunakan total modal **{total_modal:,} GP** yang otomatis dibagi ke 3 slot GE (**{modal_per_slot:,.0f} GP per slot**).")
+
 else:
-    st.warning("Belum ada item yang memenuhi kriteria saat ini. Coba klik tombol perbarui beberapa saat lagi.")
+    st.error("Gagal memuat data master pasar.")
