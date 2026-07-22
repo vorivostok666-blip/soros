@@ -6,7 +6,7 @@ import requests
 st.set_page_config(page_title="OSRS F2P Dip Bot", layout="centered")
 
 st.title("📊 OSRS F2P Dip Trading Bot")
-st.write("Sinyal *trading* otomatis khusus F2P berbasis analisis penurunan harga (*price dip*) dengan filter likuiditas tinggi.")
+st.write("Sinyal *trading* otomatis khusus F2P berbasis analisis penurunan harga (*price dip*) dengan variasi likuiditas.")
 
 # ==========================================
 # FITUR INPUT MODAL BEBAS OLEH PENGGUNA
@@ -15,7 +15,7 @@ st.sidebar.header("⚙️ Pengaturan Modal GE")
 total_modal = st.sidebar.number_input(
     "Masukkan Total Modal Anda (GP):", 
     min_value=1000, 
-    value=100000,  # Default modal baru Anda (100k)
+    value=100000,  # Default modal baru Anda
     step=5000,
     format="%d",
     help="Modal ini akan dibagi rata ke 3 slot aktif Grand Exchange."
@@ -79,15 +79,15 @@ with st.spinner('Memindai pasar untuk mencari barang laku...'):
 
 if not master_data.empty:
     
-    # Fungsi pemroses sinyal agar bisa digunakan untuk Sebelum & Sesudah
-    def process_signals(df, threshold_multiplier, min_d_vol, sort_by_volume_score=False):
+    # Tambahan parameter min_h_vol agar volume jam-jaman bisa disesuaikan
+    def process_signals(df, threshold_multiplier, min_d_vol, min_h_vol, sort_by_volume_score=False):
         filtered = df[
             (df['Live_Low'] > 0) & 
             (df['Hourly_Low'] > (df['Live_Low'] * threshold_multiplier)) & 
             (((df['Daily_Low'] + df['Daily_High']) / 2.0) > df['Live_Low']) & 
             ((df['Hourly_Low'] - df['Live_Low'] - df['Tax']) > 0) & 
-            (df['D_VolLow'] > min_d_vol) & 
-            (df['H_VolLow'] > 50) & 
+            (df['D_VolLow'] >= min_d_vol) & 
+            (df['H_VolLow'] >= min_h_vol) & 
             (df['Daily_High'] > df['Daily_Low'])
         ].copy()
 
@@ -136,11 +136,10 @@ if not master_data.empty:
         return result[['Nama Barang', 'Harga Beli', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']]
 
     # ==========================================
-    # TAMPILAN 1: KETAT (> 2% Anjlok)
+    # TAMPILAN 1: KETAT (> 2% Anjlok, Vol Harian > 500)
     # ==========================================
     st.subheader("📌 Top 3: Anjlok Tajam (> 2%)")
-    # Perubahan di sini: min_d_vol diubah menjadi 1000
-    df_sebelum = process_signals(master_data, threshold_multiplier=1.02, min_d_vol=1000, sort_by_volume_score=False)
+    df_sebelum = process_signals(master_data, threshold_multiplier=1.02, min_d_vol=500, min_h_vol=5, sort_by_volume_score=False)
     if not df_sebelum.empty:
         st.dataframe(df_sebelum, use_container_width=True)
     else:
@@ -149,11 +148,10 @@ if not master_data.empty:
     st.divider()
 
     # ==========================================
-    # TAMPILAN 2: LONGGAR (> 0.5% Anjlok + Super Laris)
+    # TAMPILAN 2: LONGGAR (> 0.5% Anjlok, Vol Harian > 1500)
     # ==========================================
     st.subheader("📌 Top 3: Turun Tipis tapi Super Laris (> 0.5%)")
-    # Perubahan di sini: min_d_vol diubah menjadi 5000
-    df_sesudah = process_signals(master_data, threshold_multiplier=1.005, min_d_vol=5000, sort_by_volume_score=True)
+    df_sesudah = process_signals(master_data, threshold_multiplier=1.005, min_d_vol=1500, min_h_vol=15, sort_by_volume_score=True)
     if not df_sesudah.empty:
         st.dataframe(df_sesudah, use_container_width=True)
     else:
