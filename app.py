@@ -6,7 +6,7 @@ import requests
 st.set_page_config(page_title="OSRS F2P Dip Bot", layout="centered")
 
 st.title("📊 OSRS F2P Dip Trading Bot")
-st.write("Sinyal *trading* otomatis khusus F2P berbasis analisis penurunan harga (*price dip*).")
+st.write("Sinyal *trading* otomatis khusus F2P berbasis analisis penurunan harga (*price dip*) dengan filter likuiditas tinggi.")
 
 # ==========================================
 # FITUR INPUT MODAL BEBAS OLEH PENGGUNA
@@ -33,32 +33,40 @@ if st.sidebar.button("🔄 Perbarui & Pindai Pasar"):
 def fetch_market_data():
     headers = {'User-Agent': 'Belajar_Data_Analisis_Bot_Lokal'}
     try:
+        # 1. MAPPING
         req_map = requests.get('https://prices.runescape.wiki/api/v1/osrs/mapping', headers=headers)
         df_map = pd.DataFrame(req_map.json())[['id', 'name', 'limit', 'members']]
         df_map = df_map[df_map['members'] == False]
         df_map.rename(columns={'name': 'mappingname', 'limit': 'mappinglimit'}, inplace=True)
 
+        # 2. 1 HOUR DATA
         req_1h = requests.get('https://prices.runescape.wiki/api/v1/osrs/1h', headers=headers)
         df_1h = pd.DataFrame.from_dict(req_1h.json()['data'], orient='index').reset_index()
         df_1h.rename(columns={'index': 'id', 'avgLowPrice': 'Hourly_Low', 'lowPriceVolume': 'H_VolLow'}, inplace=True)
 
+        # 3. 24 HOUR DATA
         req_24h = requests.get('https://prices.runescape.wiki/api/v1/osrs/24h', headers=headers)
         df_24h = pd.DataFrame.from_dict(req_24h.json()['data'], orient='index').reset_index()
         df_24h.rename(columns={'index': 'id', 'avgLowPrice': 'Daily_Low', 'avgHighPrice': 'Daily_High', 'lowPriceVolume': 'D_VolLow'}, inplace=True)
 
+        # 4. LATEST DATA
         req_latest = requests.get('https://prices.runescape.wiki/api/v1/osrs/latest', headers=headers)
         df_latest = pd.DataFrame.from_dict(req_latest.json()['data'], orient='index').reset_index()
         df_latest.rename(columns={'index': 'id', 'low': 'Live_Low', 'high': 'Live_High'}, inplace=True)
 
+        # Ubah ID menjadi integer yang aman
         for df in [df_1h, df_24h, df_latest, df_map]:
             df['id'] = pd.to_numeric(df['id'], errors='coerce').fillna(0).astype(int)
 
+        # Gabungkan semua data
         master = df_1h.merge(df_24h, on='id').merge(df_latest, on='id').merge(df_map, on='id', how='inner')
         
+        # Bersihkan data NaN
         for col in ['Hourly_Low', 'Live_Low', 'Daily_Low', 'Daily_High', 'D_VolLow', 'H_VolLow', 'mappinglimit']:
             if col in master.columns:
                 master[col] = pd.to_numeric(master[col], errors='coerce').fillna(0)
 
+        # Hitung Pajak
         master['Tax'] = master['Hourly_Low'].apply(lambda x: 0 if x < 100 else round((x * 0.02) - 0.5))
         return master
     except Exception as e:
@@ -66,7 +74,7 @@ def fetch_market_data():
         return pd.DataFrame()
 
 # Ambil data pasar
-with st.spinner('Memindai data pasar OSRS...'):
+with st.spinner('Memindai pasar untuk mencari barang laku...'):
     master_data = fetch_market_data()
 
 if not master_data.empty:
@@ -79,7 +87,7 @@ if not master_data.empty:
             (((df['Daily_Low'] + df['Daily_High']) / 2.0) > df['Live_Low']) & 
             ((df['Hourly_Low'] - df['Live_Low'] - df['Tax']) > 0) & 
             (df['D_VolLow'] > min_d_vol) & 
-            (df['H_VolLow'] > 2) & 
+            (df['H_VolLow'] > 50) & 
             (df['Daily_High'] > df['Daily_Low'])
         ].copy()
 
@@ -88,6 +96,7 @@ if not master_data.empty:
 
         filtered['Untung_Per_Biji'] = filtered['Hourly_Low'] - filtered['Live_Low'] - filtered['Tax']
         
+        # Kalkulator jumlah beli aman berdasarkan limit GE dan modal per slot
         def safe_calc_qty(row):
             price = row['Live_Low']
             limit = row['mappinglimit']
@@ -116,39 +125,41 @@ if not master_data.empty:
         
         result = result.rename(columns={
             'mappingname': 'Nama Barang',
-            'Live_Low': 'Harga Beli (Live)',
-            'Hourly_Low': 'Harga Jual (Normal)',
-            'Beli_Berapa_Biji': 'Jumlah Beli',
-            'Total_Untung_Slot': 'Proyeksi Untung',
+            'Live_Low': 'Harga Beli',
+            'Hourly_Low': 'Harga Jual',
+            'Beli_Berapa_Biji': 'Jml Beli',
+            'Total_Untung_Slot': 'Pr. Untung',
             'ROI_Persen': 'ROI (%)',
             'D_VolLow': 'Vol Harian'
         })
         
-        return result[['Nama Barang', 'Harga Beli (Live)', 'Harga Jual (Normal)', 'Jumlah Beli', 'Proyeksi Untung', 'ROI (%)', 'Vol Harian']]
+        return result[['Nama Barang', 'Harga Beli', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']]
 
     # ==========================================
-    # TAMPILAN 1: SEBELUM DILONGGARKAN (Ketat > 2%)
+    # TAMPILAN 1: KETAT (> 2% Anjlok)
     # ==========================================
-    st.subheader("📌 Top 3 Sebelum Dilonggarkan (Anjlokan Ekstrem > 2%)")
-    df_sebelum = process_signals(master_data, threshold_multiplier=1.02, min_d_vol=5, sort_by_volume_score=False)
+    st.subheader("📌 Top 3: Anjlok Tajam (> 2%)")
+    # Perubahan di sini: min_d_vol diubah menjadi 1000
+    df_sebelum = process_signals(master_data, threshold_multiplier=1.02, min_d_vol=1000, sort_by_volume_score=False)
     if not df_sebelum.empty:
         st.dataframe(df_sebelum, use_container_width=True)
     else:
-        st.warning("Tidak ada item yang memenuhi kriteria ketat (> 2% drop) saat ini.")
+        st.warning("Tidak ada item laku yang anjlok di atas 2% saat ini. (Lebih baik menahan uang daripada membeli barang sepi).")
 
     st.divider()
 
     # ==========================================
-    # TAMPILAN 2: SESUDAH DILONGGARKAN (Tipis > 0.5% + Prioritas Volume)
+    # TAMPILAN 2: LONGGAR (> 0.5% Anjlok + Super Laris)
     # ==========================================
-    st.subheader("📌 Top 3 Sesudah Dilonggarkan (Turun Tipis > 0.5% + Prioritas Volume)")
-    df_sesudah = process_signals(master_data, threshold_multiplier=1.005, min_d_vol=200, sort_by_volume_score=True)
+    st.subheader("📌 Top 3: Turun Tipis tapi Super Laris (> 0.5%)")
+    # Perubahan di sini: min_d_vol diubah menjadi 5000
+    df_sesudah = process_signals(master_data, threshold_multiplier=1.005, min_d_vol=5000, sort_by_volume_score=True)
     if not df_sesudah.empty:
         st.dataframe(df_sesudah, use_container_width=True)
     else:
-        st.warning("Tidak ada item yang memenuhi kriteria longgar ber-volume tinggi saat ini.")
+        st.warning("Tidak ada item super laris yang memenuhi kriteria saat ini.")
 
     st.info(f"💡 Kalkulasi ini menggunakan total modal **{total_modal:,} GP** yang otomatis dibagi ke 3 slot GE (**{modal_per_slot:,.0f} GP per slot**).")
 
 else:
-    st.error("Gagal memuat data master pasar.")
+    st.error("Gagal memuat data master pasar. Silakan klik tombol perbarui.")
