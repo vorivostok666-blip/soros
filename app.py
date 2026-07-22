@@ -6,7 +6,7 @@ import requests
 st.set_page_config(page_title="OSRS F2P Dip Bot", layout="centered")
 
 st.title("📊 OSRS F2P Dip Trading Bot")
-st.write("Sinyal *trading* otomatis khusus F2P berbasis analisis penurunan harga (*price dip*) dengan variasi likuiditas.")
+st.write("Sinyal *trading* otomatis khusus F2P berbasis analisis penurunan harga (*price dip*) dengan 3 tingkat kedalaman.")
 
 # ==========================================
 # FITUR INPUT MODAL BEBAS OLEH PENGGUNA
@@ -15,7 +15,7 @@ st.sidebar.header("⚙️ Pengaturan Modal GE")
 total_modal = st.sidebar.number_input(
     "Masukkan Total Modal Anda (GP):", 
     min_value=1000, 
-    value=100000,  # Default modal baru Anda
+    value=100000,  # Default modal 100k
     step=5000,
     format="%d",
     help="Modal ini akan dibagi rata ke 3 slot aktif Grand Exchange."
@@ -79,7 +79,7 @@ with st.spinner('Memindai pasar untuk mencari barang laku...'):
 
 if not master_data.empty:
     
-    # Tambahan parameter min_h_vol agar volume jam-jaman bisa disesuaikan
+    # Fungsi pemroses sinyal
     def process_signals(df, threshold_multiplier, min_d_vol, min_h_vol, sort_by_volume_score=False):
         filtered = df[
             (df['Live_Low'] > 0) & 
@@ -136,28 +136,43 @@ if not master_data.empty:
         return result[['Nama Barang', 'Harga Beli', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']]
 
     # ==========================================
-    # TAMPILAN 1: KETAT (> 2% Anjlok, Vol Harian > 500)
+    # TAMPILAN 1: JACKPOT (> 5% Anjlok)
     # ==========================================
-    st.subheader("📌 Top 3: Anjlok Tajam (> 2%)")
-    df_sebelum = process_signals(master_data, threshold_multiplier=1.02, min_d_vol=500, min_h_vol=5, sort_by_volume_score=False)
-    if not df_sebelum.empty:
-        st.dataframe(df_sebelum, use_container_width=True)
+    st.subheader("🎯 Tabel 1: JACKPOT! Anjlok Ekstrem (> 5%)")
+    # Volume harian saya set 200, karena barang yang anjlok 5% biasanya barang dengan volume menengah
+    df_jackpot = process_signals(master_data, threshold_multiplier=1.05, min_d_vol=200, min_h_vol=2, sort_by_volume_score=False)
+    if not df_jackpot.empty:
+        st.success("🚨 ADA BARANG JACKPOT! Segera pasang Buy Offer sebelum keduluan pemain lain!")
+        st.dataframe(df_jackpot, use_container_width=True)
     else:
-        st.warning("Tidak ada item laku yang anjlok di atas 2% saat ini. (Lebih baik menahan uang daripada membeli barang sepi).")
+        st.info("Sedang tidak ada pemain yang 'panic sell' atau salah harga ekstrem saat ini.")
 
     st.divider()
 
     # ==========================================
-    # TAMPILAN 2: LONGGAR (> 0.5% Anjlok, Vol Harian > 1500)
+    # TAMPILAN 2: ANJLOK TAJAM (> 3% Anjlok)
     # ==========================================
-    st.subheader("📌 Top 3: Turun Tipis tapi Super Laris (> 0.5%)")
-    df_sesudah = process_signals(master_data, threshold_multiplier=1.005, min_d_vol=1500, min_h_vol=15, sort_by_volume_score=True)
-    if not df_sesudah.empty:
-        st.dataframe(df_sesudah, use_container_width=True)
+    st.subheader("🔥 Tabel 2: Anjlok Tajam (> 3%)")
+    df_tajam = process_signals(master_data, threshold_multiplier=1.03, min_d_vol=500, min_h_vol=5, sort_by_volume_score=False)
+    if not df_tajam.empty:
+        st.dataframe(df_tajam, use_container_width=True)
+    else:
+        st.warning("Tidak ada item F2P yang anjlok di atas 3% saat ini.")
+
+    st.divider()
+
+    # ==========================================
+    # TAMPILAN 3: LONGGAR (> 0.5% Anjlok + Super Laris)
+    # ==========================================
+    st.subheader("⚡ Tabel 3: Turun Tipis tapi Super Laris (> 0.5%)")
+    df_laris = process_signals(master_data, threshold_multiplier=1.005, min_d_vol=1500, min_h_vol=15, sort_by_volume_score=True)
+    if not df_laris.empty:
+        st.dataframe(df_laris, use_container_width=True)
     else:
         st.warning("Tidak ada item super laris yang memenuhi kriteria saat ini.")
 
-    st.info(f"💡 Kalkulasi ini menggunakan total modal **{total_modal:,} GP** yang otomatis dibagi ke 3 slot GE (**{modal_per_slot:,.0f} GP per slot**).")
+    st.divider()
+    st.info(f"💡 Info: Perhitungan menggunakan total modal **{total_modal:,} GP** yang dibagi ke 3 slot GE (**{modal_per_slot:,.0f} GP per slot**).")
 
 else:
     st.error("Gagal memuat data master pasar. Silakan klik tombol perbarui.")
