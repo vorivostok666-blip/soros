@@ -110,14 +110,15 @@ with st.spinner('Memindai pasar untuk mencari barang laku...'):
 
 if not master_data.empty:
     
-    # Fungsi pemroses sinyal
-    def process_signals(df, threshold_multiplier, min_d_vol, min_h_vol, sort_by_volume_score=False):
+    # Fungsi pemroses sinyal dengan tambahan 'max_d_vol'
+    def process_signals(df, threshold_multiplier, min_d_vol, min_h_vol, max_d_vol=float('inf'), sort_by_volume_score=False):
         filtered = df[
             (df['Live_Low'] > 0) & 
             (df['Hourly_Low'] > (df['Live_Low'] * threshold_multiplier)) & 
             (((df['Daily_Low'] + df['Daily_High']) / 2.0) > df['Live_Low']) & 
             ((df['Hourly_Low'] - df['Live_Low'] - df['Tax']) > 0) & 
             (df['D_VolLow'] >= min_d_vol) & 
+            (df['D_VolLow'] <= max_d_vol) &  # <-- Ini filter maksimalnya
             (df['H_VolLow'] >= min_h_vol) & 
             (df['Daily_High'] > df['Daily_Low'])
         ].copy()
@@ -165,16 +166,16 @@ if not master_data.empty:
         return result[['Nama Barang', 'Harga Beli', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']]
 
     # ==========================================
-    # TAMPILAN 1: JACKPOT (> 5% Anjlok)
+    # TAMPILAN 1: JACKPOT (> 5% Anjlok, Vol < 100)
     # ==========================================
-    st.subheader("🎯 Tabel 1: JACKPOT! Anjlok Ekstrem (> 5%)")
-    # Volume dibuat paling kecil (min 50 sehari / 1 per jam) agar bisa menangkap barang langka yang di-dumping
-    df_jackpot = process_signals(master_data, threshold_multiplier=1.05, min_d_vol=50, min_h_vol=1, sort_by_volume_score=False)
+    st.subheader("🎯 Tabel 1: JACKPOT! Barang Sepi Anjlok Ekstrem (> 5%)")
+    # Tambahkan parameter max_d_vol=100 agar barang laku keras seperti Mithril Arrow tidak masuk sini
+    df_jackpot = process_signals(master_data, threshold_multiplier=1.05, min_d_vol=1, min_h_vol=0, max_d_vol=100, sort_by_volume_score=False)
     if not df_jackpot.empty:
         st.success("🚨 ADA BARANG JACKPOT! Segera pasang Buy Offer sebelum keduluan pemain lain!")
         st.dataframe(df_jackpot, use_container_width=True)
     else:
-        st.info("Sedang tidak ada pemain yang 'panic sell' atau salah harga ekstrem saat ini.")
+        st.info("Sedang tidak ada barang ber-volume rendah yang 'panic sell' saat ini.")
 
     st.divider()
 
@@ -182,7 +183,7 @@ if not master_data.empty:
     # TAMPILAN 2: ANJLOK TAJAM (> 2% Anjlok)
     # ==========================================
     st.subheader("🔥 Tabel 2: Anjlok Tajam (> 2%)")
-    # Kembali ke 2% dengan volume minimum standar (500 per hari)
+    # Barang laku menengah ke atas (min 500)
     df_tajam = process_signals(master_data, threshold_multiplier=1.02, min_d_vol=500, min_h_vol=5, sort_by_volume_score=False)
     if not df_tajam.empty:
         st.dataframe(df_tajam, use_container_width=True)
@@ -195,7 +196,7 @@ if not master_data.empty:
     # TAMPILAN 3: LONGGAR (> 0.5% Anjlok + Super Laris)
     # ==========================================
     st.subheader("⚡ Tabel 3: Turun Tipis tapi Super Laris (> 0.5%)")
-    # Tetap di 0.5% dengan volume sangat tinggi (1500 per hari)
+    # Barang super laku (min 1500)
     df_laris = process_signals(master_data, threshold_multiplier=1.005, min_d_vol=1500, min_h_vol=15, sort_by_volume_score=True)
     if not df_laris.empty:
         st.dataframe(df_laris, use_container_width=True)
