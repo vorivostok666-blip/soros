@@ -38,13 +38,18 @@ def load_trading_signals():
         df_latest = pd.DataFrame.from_dict(req_latest.json()['data'], orient='index').reset_index()
         df_latest.rename(columns={'index': 'id', 'low': 'Live_Low', 'high': 'Live_High'}, inplace=True)
 
-        # Pastikan tipe data ID seragam
-        for df in [df_1h, df_24h, df_latest]:
-            df['id'] = df['id'].astype(int)
+        # Bersihkan ID dari NaN dan jadikan integer aman
+        for df in [df_1h, df_24h, df_latest, df_map]:
+            df['id'] = pd.to_numeric(df['id'], errors='coerce').fillna(0).astype(int)
 
         # Gabungkan data
         master = df_1h.merge(df_24h, on='id').merge(df_latest, on='id').merge(df_map, on='id', how='inner')
         
+        # Konversi kolom harga dan volume menjadi numerik agar tidak error
+        for col in ['Hourly_Low', 'Live_Low', 'Daily_Low', 'Daily_High', 'D_VolLow', 'mappinglimit']:
+            if col in master.columns:
+                master[col] = pd.to_numeric(master[col], errors='coerce').fillna(0)
+
         # Kalkulasi Pajak: Barang < 100 GP Bebas Pajak, di atasnya 2%
         master['Tax'] = master['Hourly_Low'].apply(lambda x: 0 if x < 100 else round((x * 0.02) - 0.5))
         
@@ -61,11 +66,21 @@ def load_trading_signals():
         if filtered.empty:
             return pd.DataFrame()
 
-        # Kalkulasi Modal 58k GP terbagi 3 slot (~19.333 GP per slot)
+        # Kalkulasi Modal 58k GP terbagi 3 slot (~19.333 GP per slot) secara aman dari NaN
         filtered['Untung_Per_Biji'] = filtered['Hourly_Low'] - filtered['Live_Low'] - filtered['Tax']
-        filtered['Beli_Berapa_Biji'] = filtered[['mappinglimit', 'Live_Low']].apply(
-            lambda row: min(row['mappinglimit'], int(19333 / row['Live_Low'])) if row['Live_Low'] > 0 else 0, axis=1
-        )
+        
+        def safe_calc_qty(row):
+            price = row['Live_Low']
+            limit = row['mappinglimit']
+            if price <= 0:
+                return 0
+            max_afford = 19333 / price
+            # Jika limit ada dan valid, ambil nilai terkecil antara limit dan kemampuan beli
+            if limit > 0:
+                return int(min(limit, max_afford))
+            return int(max_afford)
+
+        filtered['Beli_Berapa_Biji'] = filtered.apply(safe_calc_qty, axis=1)
         filtered['Total_Untung_Slot'] = filtered['Untung_Per_Biji'] * filtered['Beli_Berapa_Biji']
         filtered['ROI_Persen'] = (filtered['Untung_Per_Biji'] / filtered['Live_Low']) * 100
         
