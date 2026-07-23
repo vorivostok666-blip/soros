@@ -53,9 +53,9 @@ div[data-testid="stSidebar"] .stButton > button:hover {{
 st.sidebar.header("⚙️ Pengaturan Modal GE")
 total_modal = st.sidebar.number_input(
     "Masukkan Total Modal Anda (GP):", 
-    min_value=1000, 
-    value=100000,  # Default modal 100k
-    step=5000,
+    min_value=10000, 
+    value=3000000,  # <-- DIPERBARUI: Default modal langsung di 3 Juta (3m)
+    step=100000,    # <-- DIPERBARUI: Kelipatan tombol naik jadi 100k per klik
     format="%d",
     help="Modal ini akan dibagi rata ke 3 slot aktif Grand Exchange."
 )
@@ -130,7 +130,6 @@ if not master_data.empty:
 
         filtered['Untung_Per_Biji'] = filtered['Hourly_Low'] - filtered['Live_Low'] - filtered['Tax']
         
-        # --- LOGIKA BARU: 3-WAY SAFETY LOCK (MODAL vs GE LIMIT vs 3% VOL HARIAN) ---
         def safe_calc_qty(row):
             price = row['Live_Low']
             limit = row['mappinglimit']
@@ -139,13 +138,9 @@ if not master_data.empty:
             if price <= 0:
                 return 0
             
-            # 1. Batas kemampuan Modal GP per slot
             max_afford = modal_per_slot / price
-            
-            # 2. Batas Likuiditas Pasar (Maksimal 3% dari total transaksi harian, minimal 1 biji)
             max_vol_market = max(1.0, vol_harian * 0.03)
             
-            # 3. Kumpulkan semua batas valid, lalu ambil angka YANG PALING KECIL (Paling Aman)
             valid_limits = [max_afford, max_vol_market]
             if limit > 0:
                 valid_limits.append(limit)
@@ -241,7 +236,6 @@ if not master_data.empty:
             res = requests.get(url, headers=headers).json()
             if 'data' in res and len(res['data']) > 0:
                 df_chart = pd.DataFrame(res['data'])
-                # KONVERSI KE ZONA WAKTU INDONESIA BARAT (WIB / Asia/Jakarta)
                 df_chart['Waktu'] = pd.to_datetime(df_chart['timestamp'], unit='s', utc=True).dt.tz_convert('Asia/Jakarta').dt.tz_localize(None)
                 df_chart['avgLowPrice'] = df_chart['avgLowPrice'].ffill().bfill()
                 df_chart['avgHighPrice'] = df_chart['avgHighPrice'].ffill().bfill()
@@ -256,7 +250,6 @@ if not master_data.empty:
     if not df_chart.empty and len(df_chart) > 15:
         df_chart = df_chart.sort_values('Waktu').reset_index(drop=True)
 
-        # --- LOGIKA PENENTUAN TITIK BELI (DIP 2%) & TITIK JUAL ---
         df_chart['MA_Low'] = df_chart['avgLowPrice'].rolling(window=6, min_periods=1).mean()
         df_chart['MA_High'] = df_chart['avgHighPrice'].rolling(window=6, min_periods=1).mean()
         
@@ -267,7 +260,6 @@ if not master_data.empty:
             lambda row: row['avgHighPrice'] if row['avgHighPrice'] > (row['MA_High'] * 1.015) else None, axis=1
         )
 
-        # --- LOGIKA BACKTESTING (PROYEKSI VS REALITA) ---
         test_steps = min(6, int(len(df_chart) * 0.2))
         train_end_idx = len(df_chart) - test_steps
         
@@ -289,7 +281,6 @@ if not master_data.empty:
             'Proyeksi_Jual': pred_high
         })
 
-        # --- MENGHITUNG % AKURASI (MAPE) ---
         actual_low = test_data['avgLowPrice'].values
         actual_high = test_data['avgHighPrice'].values
         eval_pred_low = pred_low[1:]
@@ -301,7 +292,6 @@ if not master_data.empty:
         akurasi_beli = max(0.0, 100.0 - error_low_pct)
         akurasi_jual = max(0.0, 100.0 - error_high_pct)
 
-        # --- TAMPILAN KOTAK SKOR AKURASI DI HP ---
         col_acc1, col_acc2 = st.columns(2)
         with col_acc1:
             st.metric(
@@ -316,7 +306,6 @@ if not master_data.empty:
                 delta="Sangat Akurat (>90%)" if akurasi_jual >= 90 else "Akurasi Sedang" if akurasi_jual >= 80 else "Volatil / Berubah Mendadak"
             )
 
-        # --- PEMBUATAN GRAFIK ALTAIR BERLAPIS (WIB) ---
         line_low = alt.Chart(df_chart).mark_line(color='#00a8ff', strokeWidth=2).encode(
             x=alt.X('Waktu:T', title='Waktu (WIB)'),
             y=alt.Y('avgLowPrice:Q', title='Harga (GP)', scale=alt.Scale(zero=False)),
@@ -381,10 +370,9 @@ if not master_data.empty:
         st.altair_chart(chart_final, use_container_width=True)
         
         st.markdown("""
-        💡 **Cara Membaca Hasil Uji Akurasi & Logika Baru:**
-        * 🛡️ **Jml Beli (3-Way Lock):** Angka di tabel atas sekarang dijamin aman! Kalaupun modal Anda mampu beli 1.000 biji, tapi kalau 3% dari volume pasar hari itu cuma 30 biji, sistem akan otomatis menyuruh Anda beli **30 biji saja**.
-        * 🕒 **Jam WIB Akurat:** Semua jam yang tertera di sumbu bawah maupun saat layar HP disentuh sudah otomatis dikonversi ke Waktu Indonesia Barat.
-        * 🎯 **Akurasi > 90%:** Artinya pasar barang ini sangat stabil dan ramalan garis trennya sangat bisa dipercaya untuk membantu Anda eksekusi.
+        💡 **Tips Modal 3 Juta GP:**
+        * 🛡️ **Jangan Kaget Jika Sisa Uang Banyak:** Jika Anda membeli barang murah, uang di slot tidak akan habis terpakai karena dibatasi aturan resmi Jagex (Buy Limit). Ini adalah hal normal agar Anda tidak dicurigai sebagai bot oleh sistem OSRS!
+        * 🚀 **Fokus Barang Mahal:** Untuk menghabiskan 1 Juta GP per slot dengan cepat, pilih barang-barang yang harganya di atas **500 GP** (seperti perlengkapan *Rune/Adamant*, *Runite ore*, atau *Swordfish*).
         """)
     else:
         st.warning(f"Belum ada data grafik historis yang cukup untuk barang **{pilihan_nama}** pada interval waktu **{rentang_waktu}**.")
