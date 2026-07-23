@@ -2,13 +2,14 @@ import streamlit as st
 import pandas as pd
 import requests
 import time
-import altair as alt  # Library bawaan Streamlit untuk grafik interaktif tingkat lanjut
+import altair as alt
+import numpy as np  # Ditambahkan untuk kalkulasi prediksi masa depan (Regresi Linier)
 
 # Konfigurasi Tampilan Halaman Web (Responsif untuk HP)
 st.set_page_config(page_title="OSRS F2P Dip Bot", layout="centered")
 
 st.title("📊 OSRS F2P Dip Trading Bot")
-st.write("Sinyal *trading* otomatis khusus F2P berbasis analisis penurunan harga (*price dip*) + Grafik Indikator Masuk/Keluar.")
+st.write("Sinyal *trading* otomatis khusus F2P berbasis analisis penurunan harga (*price dip*) + Grafik Indikator & Proyeksi Masa Depan.")
 
 # ==========================================
 # LOGIKA WAKTU & WARNA TOMBOL (KUNING / HIJAU)
@@ -204,10 +205,10 @@ if not master_data.empty:
     st.divider()
 
     # ==========================================
-    # FITUR GRAFIK + INDIKATOR SARAN BELI & JUAL (2% THRESHOLD)
+    # FITUR GRAFIK + INDIKATOR + PROYEKSI MASA DEPAN
     # ==========================================
-    st.header("📈 Analisis Grafik + Indikator Masuk & Keluar")
-    st.write("Grafik interaktif ini memetakan riwayat harga sekaligus memberikan **Tanda Segitiga** otomatis berbasis algoritma *2% Dip Threshold*.")
+    st.header("📈 Analisis Grafik + Proyeksi Masa Depan")
+    st.write("Grafik ini memetakan riwayat harga, memberikan tanda sinyal beli/jual, serta menarik **Garis Putus-Putus (Proyeksi Tren)** ke masa depan untuk memperkirakan arah harga selanjutnya.")
 
     daftar_item = master_data.sort_values(by='mappingname')[['id', 'mappingname']].drop_duplicates()
     
@@ -235,45 +236,94 @@ if not master_data.empty:
             pass
         return pd.DataFrame()
 
-    with st.spinner(f"Memuat grafik untuk {pilihan_nama}..."):
+    with st.spinner(f"Memuat grafik dan menghitung proyeksi untuk {pilihan_nama}..."):
         df_chart = fetch_chart_data(id_terpilih, rentang_waktu)
 
     if not df_chart.empty and 'avgLowPrice' in df_chart.columns:
-        
+        df_chart = df_chart.sort_values('Waktu').reset_index(drop=True)
+
         # --- LOGIKA PENENTUAN TITIK BELI (DIP 2%) & TITIK JUAL ---
-        # 1. Hitung Moving Average (Rata-rata bergerak) 6 periode sebelumnya sebagai acuan normal
         df_chart['MA_Low'] = df_chart['avgLowPrice'].rolling(window=6, min_periods=1).mean()
         df_chart['MA_High'] = df_chart['avgHighPrice'].rolling(window=6, min_periods=1).mean()
         
-        # 2. 🟢 Saran Beli: Ketika harga beli jatuh >= 2% dari rata-rata pergerakan sebelumnya
         df_chart['Saran_Beli'] = df_chart.apply(
             lambda row: row['avgLowPrice'] if row['avgLowPrice'] < (row['MA_Low'] / 1.02) else None, axis=1
         )
-        
-        # 3. 🔴 Saran Jual: Ketika harga jual melonjak >= 1.5% di atas rata-rata (Take Profit!)
         df_chart['Saran_Jual'] = df_chart.apply(
             lambda row: row['avgHighPrice'] if row['avgHighPrice'] > (row['MA_High'] * 1.015) else None, axis=1
         )
 
+        # --- LOGIKA PREDIKSI / PROYEKSI MASA DEPAN (REGRESI LINIER) ---
+        # Mengambil 15 titik waktu terakhir untuk membaca tren momentum jangka pendek
+        n_recent = min(len(df_chart), 15)
+        recent_data = df_chart.tail(n_recent).copy()
+        
+        # Sumbu numerik untuk regresi
+        x_recent = np.arange(n_recent)
+        
+        # Hitung kemiringan (slope) dan titik potong garis tren
+        poly_low = np.polyfit(x_recent, recent_data['avgLowPrice'], 1)
+        poly_high = np.polyfit(x_recent, recent_data['avgHighPrice'], 1)
+        
+        # Buat titik waktu masa depan (6 langkah ke depan)
+        last_time = df_chart['Waktu'].iloc[-1]
+        time_diff = df_chart['Waktu'].diff().median() if len(df_chart) > 1 else pd.Timedelta(hours=1)
+        
+        future_steps = 6
+        future_dates = [last_time + (time_diff * (i + 1)) for i in range(future_steps)]
+        
+        # Gabungkan titik terakhir asli dengan titik masa depan agar garisnya menyambung mulus
+        x_future = np.arange(n_recent - 1, n_recent + future_steps)
+        future_dates_connected = [last_time] + future_dates
+        
+        pred_low = np.polyval(poly_low, x_future)
+        pred_high = np.polyval(poly_high, x_future)
+        
+        df_future = pd.DataFrame({
+            'Waktu': future_dates_connected,
+            'Proyeksi_Beli': pred_low,
+            'Proyeksi_Jual': pred_high
+        })
+
         # --- PEMBUATAN GRAFIK ALTAIR BERLAPIS (LAYERED CHART) ---
-        # A. Garis Harga Beli (Biru)
+        # A. Garis Harga Beli Asli (Biru)
         line_low = alt.Chart(df_chart).mark_line(color='#00a8ff', strokeWidth=2).encode(
             x=alt.X('Waktu:T', title='Waktu'),
-            y=alt.Y('avgLowPrice:Q', title='Harga (GP)', scale=alt.Scale(zero=False)), # zero=False agar auto-zoom!
+            y=alt.Y('avgLowPrice:Q', title='Harga (GP)', scale=alt.Scale(zero=False)),
             tooltip=[
                 alt.Tooltip('Waktu:T', title='Waktu', format='%H:%M'),
-                alt.Tooltip('avgLowPrice:Q', title='Harga Beli', format=',.0f'),
-                alt.Tooltip('avgHighPrice:Q', title='Harga Jual', format=',.0f')
+                alt.Tooltip('avgLowPrice:Q', title='Harga Beli Aktual', format=',.0f'),
+                alt.Tooltip('avgHighPrice:Q', title='Harga Jual Aktual', format=',.0f')
             ]
         )
         
-        # B. Garis Harga Jual (Merah/Orange)
+        # B. Garis Harga Jual Asli (Merah)
         line_high = alt.Chart(df_chart).mark_line(color='#e84118', strokeWidth=2).encode(
             x='Waktu:T',
             y='avgHighPrice:Q'
         )
 
-        # C. Tanda Segitiga Hijau (Saran Beli)
+        # C. Proyeksi Masa Depan Beli (Biru Putus-Putus)
+        line_future_low = alt.Chart(df_future).mark_line(color='#00d2d3', strokeDash=[5, 5], strokeWidth=2).encode(
+            x='Waktu:T',
+            y='Proyeksi_Beli:Q',
+            tooltip=[
+                alt.Tooltip('Waktu:T', title='Waktu Prediksi', format='%H:%M'),
+                alt.Tooltip('Proyeksi_Beli:Q', title='🔮 Proyeksi Beli', format=',.0f')
+            ]
+        )
+
+        # D. Proyeksi Masa Depan Jual (Orange Putus-Putus)
+        line_future_high = alt.Chart(df_future).mark_line(color='#ff9f43', strokeDash=[5, 5], strokeWidth=2).encode(
+            x='Waktu:T',
+            y='Proyeksi_Jual:Q',
+            tooltip=[
+                alt.Tooltip('Waktu:T', title='Waktu Prediksi', format='%H:%M'),
+                alt.Tooltip('Proyeksi_Jual:Q', title='🔮 Proyeksi Jual', format=',.0f')
+            ]
+        )
+
+        # E. Tanda Segitiga Hijau (Saran Beli)
         points_buy = alt.Chart(df_chart.dropna(subset=['Saran_Beli'])).mark_point(
             shape='triangle-up', size=180, color='#00e676', filled=True, opacity=1
         ).encode(
@@ -285,7 +335,7 @@ if not master_data.empty:
             ]
         )
 
-        # D. Tanda Segitiga Merah (Saran Jual)
+        # F. Tanda Segitiga Merah (Saran Jual)
         points_sell = alt.Chart(df_chart.dropna(subset=['Saran_Jual'])).mark_point(
             shape='triangle-down', size=180, color='#ff1744', filled=True, opacity=1
         ).encode(
@@ -297,18 +347,22 @@ if not master_data.empty:
             ]
         )
 
-        # Gabungkan semua garis dan titik segitiga menjadi 1 grafik interaktif
-        chart_final = alt.layer(line_low, line_high, points_buy, points_sell).interactive()
+        # Gabungkan semua garis, prediksi putus-putus, dan segitiga menjadi 1 grafik interaktif
+        chart_final = alt.layer(
+            line_low, line_high, 
+            line_future_low, line_future_high, 
+            points_buy, points_sell
+        ).interactive()
         
         # Tampilkan grafik ke layar HP
         st.altair_chart(chart_final, use_container_width=True)
         
         # Panduan Eksekusi Visual
         st.markdown("""
-        💡 **Cara Membaca Indikator di Grafik:**
-        * 🟢 **Segitiga Hijau Menunjuk ke Atas:** Sinyal **BUY!** Ini menandakan pada jam tersebut harga barang terdeteksi anjlok tajam $\ge 2\%$ di bawah rata-rata. Pasang *Buy Offer* di kisaran harga ini.
-        * 🔴 **Segitiga Merah Menunjuk ke Bawah:** Sinyal **SELL / TAKE PROFIT!** Harga sudah memantul naik ke titik puncaknya. Jika Anda sudah memegang barangnya, pasang *Sell Offer* di sekitar harga ini.
-        * 👆 *Tips HP:* Anda bisa sentuh/klik tepat di tanda segitiga tersebut untuk melihat nominal harga persisnya!
+        💡 **Cara Membaca Grafik, Indikator & Proyeksi:**
+        * 🔮 **Garis Putus-Putus (Proyeksi Masa Depan):** Menunjukkan arah tren harga berdasarkan momentum transaksi terakhir. Jika garis putus-putus menukik naik, artinya harga diprediksi sedang dalam tren penguatan (*bullish*). Jika menukik turun, harga diprediksi masih akan melemah.
+        * 🟢 **Segitiga Hijau Menunjuk ke Atas:** Sinyal **BUY!** Terdeteksi harga jatuh $\ge 2\%$ di bawah rata-rata. Waktu yang baik untuk memasang *Buy Offer*.
+        * 🔴 **Segitiga Merah Menunjuk ke Bawah:** Sinyal **SELL / TAKE PROFIT!** Harga sudah memantul naik ke puncaknya. Waktu yang tepat untuk menjual barang Anda di GE.
         """)
     else:
         st.warning(f"Belum ada data grafik historis yang cukup untuk barang **{pilihan_nama}** pada interval waktu **{rentang_waktu}**.")
