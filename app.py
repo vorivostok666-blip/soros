@@ -9,7 +9,7 @@ import numpy as np
 st.set_page_config(page_title="OSRS F2P Dip Bot", layout="centered")
 
 st.title("📊 OSRS F2P Dip Trading Bot")
-st.write("Sinyal *trading* otomatis F2P + Grafik Analisis, Indikator Masuk/Keluar & Uji Akurasi Proyeksi (*Backtesting*).")
+st.write("Sinyal *trading* otomatis F2P + Grafik Analisis (Waktu WIB), Indikator Masuk/Keluar & Uji Akurasi Proyeksi (*Backtesting*).")
 
 # ==========================================
 # LOGIKA WAKTU & WARNA TOMBOL (KUNING / HIJAU)
@@ -205,9 +205,9 @@ if not master_data.empty:
     st.divider()
 
     # ==========================================
-    # FITUR GRAFIK: BACKTESTING AKURASI PROYEKSI VS REALITA
+    # FITUR GRAFIK: BACKTESTING AKURASI PROYEKSI VS REALITA (WIB)
     # ==========================================
-    st.header("📈 Uji Akurasi Proyeksi vs Realita (*Backtesting*)")
+    st.header("📈 Uji Akurasi Proyeksi vs Realita (Waktu WIB)")
     st.write("Sistem memotong data masa lalu untuk meramal harga masa kini, lalu membandingkannya dengan **Harga Kenyataan (Realita)** untuk menghitung seberapa akurat tren algoritmanya.")
 
     daftar_item = master_data.sort_values(by='mappingname')[['id', 'mappingname']].drop_duplicates()
@@ -228,7 +228,8 @@ if not master_data.empty:
             res = requests.get(url, headers=headers).json()
             if 'data' in res and len(res['data']) > 0:
                 df_chart = pd.DataFrame(res['data'])
-                df_chart['Waktu'] = pd.to_datetime(df_chart['timestamp'], unit='s')
+                # KONVERSI KE ZONA WAKTU INDONESIA BARAT (WIB / Asia/Jakarta)
+                df_chart['Waktu'] = pd.to_datetime(df_chart['timestamp'], unit='s', utc=True).dt.tz_convert('Asia/Jakarta').dt.tz_localize(None)
                 df_chart['avgLowPrice'] = df_chart['avgLowPrice'].ffill().bfill()
                 df_chart['avgHighPrice'] = df_chart['avgHighPrice'].ffill().bfill()
                 return df_chart
@@ -254,23 +255,17 @@ if not master_data.empty:
         )
 
         # --- LOGIKA BACKTESTING (PROYEKSI VS REALITA) ---
-        # Kita potong 6 titik waktu terakhir sebagai "REALITA"
-        # Kita gunakan 15 titik sebelum itu sebagai "MASA LALU" untuk membuat proyeksi
         test_steps = min(6, int(len(df_chart) * 0.2))
         train_end_idx = len(df_chart) - test_steps
         
         train_data = df_chart.iloc[max(0, train_end_idx-15):train_end_idx].copy()
-        test_data = df_chart.iloc[train_end_idx:].copy() # Ini data kenyataan (Realita)
+        test_data = df_chart.iloc[train_end_idx:].copy()
         
-        # Buat model regresi dari data masa lalu
         x_train = np.arange(len(train_data))
         poly_low = np.polyfit(x_train, train_data['avgLowPrice'], 1)
         poly_high = np.polyfit(x_train, train_data['avgHighPrice'], 1)
         
-        # Proyeksikan ke rentang waktu "test_data"
         x_test = np.arange(len(train_data) - 1, len(train_data) + test_steps)
-        
-        # Waktu digabungkan dengan 1 titik sebelum realita agar garisnya menyambung
         dates_connected = [train_data['Waktu'].iloc[-1]] + test_data['Waktu'].tolist()
         pred_low = np.polyval(poly_low, x_test)
         pred_high = np.polyval(poly_high, x_test)
@@ -282,15 +277,11 @@ if not master_data.empty:
         })
 
         # --- MENGHITUNG % AKURASI (MAPE) ---
-        # Selisih mutlak antara Realita dan Proyeksi
         actual_low = test_data['avgLowPrice'].values
         actual_high = test_data['avgHighPrice'].values
-        
-        # Mengambil prediksi yang sejajar dengan data test (tanpa titik sambungan)
         eval_pred_low = pred_low[1:]
         eval_pred_high = pred_high[1:]
         
-        # Rumus MAPE (Mean Absolute Percentage Error)
         error_low_pct = np.mean(np.abs((actual_low - eval_pred_low) / actual_low)) * 100
         error_high_pct = np.mean(np.abs((actual_high - eval_pred_high) / actual_high)) * 100
         
@@ -303,63 +294,71 @@ if not master_data.empty:
             st.metric(
                 label="🎯 Akurasi Proyeksi Beli", 
                 value=f"{akurasi_beli:.1f}%",
-                delta="Sangat Akurat (>90%)" if akurasi_beli >= 90 else "Akurasi Sedang" if akurasi_beli >= 80 else "Volatil / Berubah Mendedak"
+                delta="Sangat Akurat (>90%)" if akurasi_beli >= 90 else "Akurasi Sedang" if akurasi_beli >= 80 else "Volatil / Berubah Mendadak"
             )
         with col_acc2:
             st.metric(
                 label="🎯 Akurasi Proyeksi Jual", 
                 value=f"{akurasi_jual:.1f}%",
-                delta="Sangat Akurat (>90%)" if akurasi_jual >= 90 else "Akurasi Sedang" if akurasi_jual >= 80 else "Volatil / Berubah Mendedak"
+                delta="Sangat Akurat (>90%)" if akurasi_jual >= 90 else "Akurasi Sedang" if akurasi_jual >= 80 else "Volatil / Berubah Mendadak"
             )
 
-        # --- PEMBUATAN GRAFIK ALTAIR BERLAPIS ---
-        # A. Garis Harga Realita Beli Asli (Biru)
+        # --- PEMBUATAN GRAFIK ALTAIR BERLAPIS (WIB) ---
         line_low = alt.Chart(df_chart).mark_line(color='#00a8ff', strokeWidth=2).encode(
-            x=alt.X('Waktu:T', title='Waktu'),
+            x=alt.X('Waktu:T', title='Waktu (WIB)'),
             y=alt.Y('avgLowPrice:Q', title='Harga (GP)', scale=alt.Scale(zero=False)),
             tooltip=[
-                alt.Tooltip('Waktu:T', title='Waktu', format='%H:%M'),
+                alt.Tooltip('Waktu:T', title='Waktu (WIB)', format='%H:%M'),
                 alt.Tooltip('avgLowPrice:Q', title='Realita Harga Beli', format=',.0f'),
                 alt.Tooltip('avgHighPrice:Q', title='Realita Harga Jual', format=',.0f')
             ]
         )
         
-        # B. Garis Harga Realita Jual Asli (Merah)
         line_high = alt.Chart(df_chart).mark_line(color='#e84118', strokeWidth=2).encode(
             x='Waktu:T',
             y='avgHighPrice:Q'
         )
 
-        # C. Proyeksi Beli yang Diuji (Biru Muda Putus-Putus)
         line_future_low = alt.Chart(df_proj_eval).mark_line(color='#00d2d3', strokeDash=[4, 4], strokeWidth=3).encode(
             x='Waktu:T',
             y='Proyeksi_Beli:Q',
             tooltip=[
-                alt.Tooltip('Waktu:T', title='Waktu Evaluasi', format='%H:%M'),
+                alt.Tooltip('Waktu:T', title='Waktu Evaluasi (WIB)', format='%H:%M'),
                 alt.Tooltip('Proyeksi_Beli:Q', title='🔮 Proyeksi Beli (Ramalan)', format=',.0f')
             ]
         )
 
-        # D. Proyeksi Jual yang Diuji (Orange Putus-Putus)
         line_future_high = alt.Chart(df_proj_eval).mark_line(color='#ff9f43', strokeDash=[4, 4], strokeWidth=3).encode(
             x='Waktu:T',
             y='Proyeksi_Jual:Q',
             tooltip=[
-                alt.Tooltip('Waktu:T', title='Waktu Evaluasi', format='%H:%M'),
+                alt.Tooltip('Waktu:T', title='Waktu Evaluasi (WIB)', format='%H:%M'),
                 alt.Tooltip('Proyeksi_Jual:Q', title='🔮 Proyeksi Jual (Ramalan)', format=',.0f')
             ]
         )
 
-        # E. Tanda Segitiga Hijau & Merah (Saran Beli & Jual)
         points_buy = alt.Chart(df_chart.dropna(subset=['Saran_Beli'])).mark_point(
             shape='triangle-up', size=180, color='#00e676', filled=True
-        ).encode(x='Waktu:T', y='Saran_Beli:Q')
+        ).encode(
+            x='Waktu:T', 
+            y='Saran_Beli:Q',
+            tooltip=[
+                alt.Tooltip('Waktu:T', title='Waktu Beli (WIB)', format='%H:%M'),
+                alt.Tooltip('Saran_Beli:Q', title='🟢 SARAN BELI', format=',.0f')
+            ]
+        )
 
         points_sell = alt.Chart(df_chart.dropna(subset=['Saran_Jual'])).mark_point(
             shape='triangle-down', size=180, color='#ff1744', filled=True
-        ).encode(x='Waktu:T', y='Saran_Jual:Q')
+        ).encode(
+            x='Waktu:T', 
+            y='Saran_Jual:Q',
+            tooltip=[
+                alt.Tooltip('Waktu:T', title='Waktu Jual (WIB)', format='%H:%M'),
+                alt.Tooltip('Saran_Jual:Q', title='🔴 SARAN JUAL', format=',.0f')
+            ]
+        )
 
-        # Gabungkan semua ke dalam 1 grafik
         chart_final = alt.layer(
             line_low, line_high, 
             line_future_low, line_future_high, 
@@ -370,9 +369,9 @@ if not master_data.empty:
         
         st.markdown("""
         💡 **Cara Membaca Hasil Uji Akurasi:**
+        * 🕒 **Jam WIB Akurat:** Semua jam yang tertera di sumbu bawah maupun saat layar HP disentuh sudah otomatis dikonversi ke Waktu Indonesia Barat.
         * 📊 **Garis Putus-Putus vs Garis Solid:** Lihat di bagian kanan grafik! Garis putus-putus adalah *perkiraan sistem*, sedangkan garis solid adalah *harga kenyataan yang benar-benar terjadi*.
         * 🎯 **Akurasi > 90%:** Artinya pasar barang ini sangat stabil dan ramalan garis trennya sangat bisa dipercaya untuk membantu Anda eksekusi.
-        * ⚠️ **Akurasi < 80%:** Artinya pasar sedang sangat liar (*volatile*) atau baru saja ada pemain yang membongkar stok (*dumping*). Jangan terlalu mengandalkan garis putus-putus pada kondisi ini; patuhi **Segitiga Hijau** untuk amannya!
         """)
     else:
         st.warning(f"Belum ada data grafik historis yang cukup untuk barang **{pilihan_nama}** pada interval waktu **{rentang_waktu}**.")
