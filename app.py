@@ -9,7 +9,7 @@ import numpy as np
 st.set_page_config(page_title="OSRS F2P Dip Bot", layout="centered")
 
 st.title("📊 OSRS F2P Dip Trading Bot")
-st.write("Sinyal *trading* otomatis F2P + Grafik Analisis (Waktu WIB), Indikator Masuk/Keluar & Uji Akurasi Proyeksi (*Backtesting*).")
+st.write("Sinyal *trading* F2P + Logika Beli Aman (Maks 3% Vol Harian), Grafik Analisis (WIB) & Uji Akurasi Proyeksi.")
 
 # ==========================================
 # LOGIKA WAKTU & WARNA TOMBOL (KUNING / HIJAU)
@@ -112,7 +112,7 @@ with st.spinner('Memindai pasar untuk mencari barang laku...'):
 
 if not master_data.empty:
     
-    # Fungsi pemroses sinyal
+    # Fungsi pemroses sinyal dengan 3-Way Safety Lock
     def process_signals(df, threshold_multiplier, min_d_vol, min_h_vol, max_d_vol=float('inf'), sort_by_volume_score=False):
         filtered = df[
             (df['Live_Low'] > 0) & 
@@ -130,15 +130,28 @@ if not master_data.empty:
 
         filtered['Untung_Per_Biji'] = filtered['Hourly_Low'] - filtered['Live_Low'] - filtered['Tax']
         
+        # --- LOGIKA BARU: 3-WAY SAFETY LOCK (MODAL vs GE LIMIT vs 3% VOL HARIAN) ---
         def safe_calc_qty(row):
             price = row['Live_Low']
             limit = row['mappinglimit']
+            vol_harian = row['D_VolLow']
+            
             if price <= 0:
                 return 0
+            
+            # 1. Batas kemampuan Modal GP per slot
             max_afford = modal_per_slot / price
+            
+            # 2. Batas Likuiditas Pasar (Maksimal 3% dari total transaksi harian, minimal 1 biji)
+            max_vol_market = max(1.0, vol_harian * 0.03)
+            
+            # 3. Kumpulkan semua batas valid, lalu ambil angka YANG PALING KECIL (Paling Aman)
+            valid_limits = [max_afford, max_vol_market]
             if limit > 0:
-                return int(min(limit, max_afford))
-            return int(max_afford)
+                valid_limits.append(limit)
+                
+            qty_aman = min(valid_limits)
+            return int(max(qty_aman, 0))
 
         filtered['Beli_Berapa_Biji'] = filtered.apply(safe_calc_qty, axis=1)
         filtered = filtered[filtered['Beli_Berapa_Biji'] > 0].copy()
@@ -368,9 +381,9 @@ if not master_data.empty:
         st.altair_chart(chart_final, use_container_width=True)
         
         st.markdown("""
-        💡 **Cara Membaca Hasil Uji Akurasi:**
+        💡 **Cara Membaca Hasil Uji Akurasi & Logika Baru:**
+        * 🛡️ **Jml Beli (3-Way Lock):** Angka di tabel atas sekarang dijamin aman! Kalaupun modal Anda mampu beli 1.000 biji, tapi kalau 3% dari volume pasar hari itu cuma 30 biji, sistem akan otomatis menyuruh Anda beli **30 biji saja**.
         * 🕒 **Jam WIB Akurat:** Semua jam yang tertera di sumbu bawah maupun saat layar HP disentuh sudah otomatis dikonversi ke Waktu Indonesia Barat.
-        * 📊 **Garis Putus-Putus vs Garis Solid:** Lihat di bagian kanan grafik! Garis putus-putus adalah *perkiraan sistem*, sedangkan garis solid adalah *harga kenyataan yang benar-benar terjadi*.
         * 🎯 **Akurasi > 90%:** Artinya pasar barang ini sangat stabil dan ramalan garis trennya sangat bisa dipercaya untuk membantu Anda eksekusi.
         """)
     else:
