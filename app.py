@@ -2,12 +2,13 @@ import streamlit as st
 import pandas as pd
 import requests
 import time
+import altair as alt  # Library bawaan Streamlit untuk grafik interaktif tingkat lanjut
 
 # Konfigurasi Tampilan Halaman Web (Responsif untuk HP)
 st.set_page_config(page_title="OSRS F2P Dip Bot", layout="centered")
 
 st.title("📊 OSRS F2P Dip Trading Bot")
-st.write("Sinyal *trading* otomatis khusus F2P berbasis analisis penurunan harga (*price dip*) dengan 3 tingkat kedalaman.")
+st.write("Sinyal *trading* otomatis khusus F2P berbasis analisis penurunan harga (*price dip*) + Grafik Indikator Masuk/Keluar.")
 
 # ==========================================
 # LOGIKA WAKTU & WARNA TOMBOL (KUNING / HIJAU)
@@ -104,13 +105,13 @@ if st.sidebar.button(btn_label):
     st.session_state['last_update'] = time.time()
     st.rerun()
 
-# Ambil data pasar
+# Ambil data pasar utama
 with st.spinner('Memindai pasar untuk mencari barang laku...'):
     master_data = fetch_market_data()
 
 if not master_data.empty:
     
-    # Fungsi pemroses sinyal dengan tambahan 'max_d_vol'
+    # Fungsi pemroses sinyal
     def process_signals(df, threshold_multiplier, min_d_vol, min_h_vol, max_d_vol=float('inf'), sort_by_volume_score=False):
         filtered = df[
             (df['Live_Low'] > 0) & 
@@ -118,7 +119,7 @@ if not master_data.empty:
             (((df['Daily_Low'] + df['Daily_High']) / 2.0) > df['Live_Low']) & 
             ((df['Hourly_Low'] - df['Live_Low'] - df['Tax']) > 0) & 
             (df['D_VolLow'] >= min_d_vol) & 
-            (df['D_VolLow'] <= max_d_vol) &  # <-- Ini filter maksimalnya
+            (df['D_VolLow'] <= max_d_vol) & 
             (df['H_VolLow'] >= min_h_vol) & 
             (df['Daily_High'] > df['Daily_Low'])
         ].copy()
@@ -169,7 +170,6 @@ if not master_data.empty:
     # TAMPILAN 1: JACKPOT (> 5% Anjlok, Vol < 100)
     # ==========================================
     st.subheader("🎯 Tabel 1: JACKPOT! Barang Sepi Anjlok Ekstrem (> 5%)")
-    # Tambahkan parameter max_d_vol=100 agar barang laku keras seperti Mithril Arrow tidak masuk sini
     df_jackpot = process_signals(master_data, threshold_multiplier=1.05, min_d_vol=1, min_h_vol=0, max_d_vol=100, sort_by_volume_score=False)
     if not df_jackpot.empty:
         st.success("🚨 ADA BARANG JACKPOT! Segera pasang Buy Offer sebelum keduluan pemain lain!")
@@ -183,7 +183,6 @@ if not master_data.empty:
     # TAMPILAN 2: ANJLOK TAJAM (> 2% Anjlok)
     # ==========================================
     st.subheader("🔥 Tabel 2: Anjlok Tajam (> 2%)")
-    # Barang laku menengah ke atas (min 500)
     df_tajam = process_signals(master_data, threshold_multiplier=1.02, min_d_vol=500, min_h_vol=5, sort_by_volume_score=False)
     if not df_tajam.empty:
         st.dataframe(df_tajam, use_container_width=True)
@@ -196,12 +195,123 @@ if not master_data.empty:
     # TAMPILAN 3: LONGGAR (> 0.5% Anjlok + Super Laris)
     # ==========================================
     st.subheader("⚡ Tabel 3: Turun Tipis tapi Super Laris (> 0.5%)")
-    # Barang super laku (min 1500)
     df_laris = process_signals(master_data, threshold_multiplier=1.005, min_d_vol=1500, min_h_vol=15, sort_by_volume_score=True)
     if not df_laris.empty:
         st.dataframe(df_laris, use_container_width=True)
     else:
         st.warning("Tidak ada item super laris yang memenuhi kriteria saat ini.")
+
+    st.divider()
+
+    # ==========================================
+    # FITUR GRAFIK + INDIKATOR SARAN BELI & JUAL (2% THRESHOLD)
+    # ==========================================
+    st.header("📈 Analisis Grafik + Indikator Masuk & Keluar")
+    st.write("Grafik interaktif ini memetakan riwayat harga sekaligus memberikan **Tanda Segitiga** otomatis berbasis algoritma *2% Dip Threshold*.")
+
+    daftar_item = master_data.sort_values(by='mappingname')[['id', 'mappingname']].drop_duplicates()
+    
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        pilihan_nama = st.selectbox("Pilih Barang F2P:", daftar_item['mappingname'].tolist(), index=0)
+    with col2:
+        rentang_waktu = st.selectbox("Interval:", ["5m", "1h", "6h", "24h"], index=1, help="5m=5 menit, 1h=1 jam, 6h=6 jam, 24h=1 hari")
+
+    id_terpilih = daftar_item[daftar_item['mappingname'] == pilihan_nama]['id'].values[0]
+
+    @st.cache_data(ttl=180)
+    def fetch_chart_data(item_id, timestep):
+        headers = {'User-Agent': 'Belajar_Data_Analisis_Bot_Lokal'}
+        url = f"https://prices.runescape.wiki/api/v1/osrs/timeseries?timestep={timestep}&id={item_id}"
+        try:
+            res = requests.get(url, headers=headers).json()
+            if 'data' in res and len(res['data']) > 0:
+                df_chart = pd.DataFrame(res['data'])
+                df_chart['Waktu'] = pd.to_datetime(df_chart['timestamp'], unit='s')
+                df_chart['avgLowPrice'] = df_chart['avgLowPrice'].ffill().bfill()
+                df_chart['avgHighPrice'] = df_chart['avgHighPrice'].ffill().bfill()
+                return df_chart
+        except Exception:
+            pass
+        return pd.DataFrame()
+
+    with st.spinner(f"Memuat grafik untuk {pilihan_nama}..."):
+        df_chart = fetch_chart_data(id_terpilih, rentang_waktu)
+
+    if not df_chart.empty and 'avgLowPrice' in df_chart.columns:
+        
+        # --- LOGIKA PENENTUAN TITIK BELI (DIP 2%) & TITIK JUAL ---
+        # 1. Hitung Moving Average (Rata-rata bergerak) 6 periode sebelumnya sebagai acuan normal
+        df_chart['MA_Low'] = df_chart['avgLowPrice'].rolling(window=6, min_periods=1).mean()
+        df_chart['MA_High'] = df_chart['avgHighPrice'].rolling(window=6, min_periods=1).mean()
+        
+        # 2. 🟢 Saran Beli: Ketika harga beli jatuh >= 2% dari rata-rata pergerakan sebelumnya
+        df_chart['Saran_Beli'] = df_chart.apply(
+            lambda row: row['avgLowPrice'] if row['avgLowPrice'] < (row['MA_Low'] / 1.02) else None, axis=1
+        )
+        
+        # 3. 🔴 Saran Jual: Ketika harga jual melonjak >= 1.5% di atas rata-rata (Take Profit!)
+        df_chart['Saran_Jual'] = df_chart.apply(
+            lambda row: row['avgHighPrice'] if row['avgHighPrice'] > (row['MA_High'] * 1.015) else None, axis=1
+        )
+
+        # --- PEMBUATAN GRAFIK ALTAIR BERLAPIS (LAYERED CHART) ---
+        # A. Garis Harga Beli (Biru)
+        line_low = alt.Chart(df_chart).mark_line(color='#00a8ff', strokeWidth=2).encode(
+            x=alt.X('Waktu:T', title='Waktu'),
+            y=alt.Y('avgLowPrice:Q', title='Harga (GP)', scale=alt.Scale(zero=False)), # zero=False agar auto-zoom!
+            tooltip=[
+                alt.Tooltip('Waktu:T', title='Waktu', format='%H:%M'),
+                alt.Tooltip('avgLowPrice:Q', title='Harga Beli', format=',.0f'),
+                alt.Tooltip('avgHighPrice:Q', title='Harga Jual', format=',.0f')
+            ]
+        )
+        
+        # B. Garis Harga Jual (Merah/Orange)
+        line_high = alt.Chart(df_chart).mark_line(color='#e84118', strokeWidth=2).encode(
+            x='Waktu:T',
+            y='avgHighPrice:Q'
+        )
+
+        # C. Tanda Segitiga Hijau (Saran Beli)
+        points_buy = alt.Chart(df_chart.dropna(subset=['Saran_Beli'])).mark_point(
+            shape='triangle-up', size=180, color='#00e676', filled=True, opacity=1
+        ).encode(
+            x='Waktu:T',
+            y='Saran_Beli:Q',
+            tooltip=[
+                alt.Tooltip('Waktu:T', title='Waktu Beli', format='%H:%M'),
+                alt.Tooltip('Saran_Beli:Q', title='🟢 SARAN BELI (Anjlok >2%)', format=',.0f')
+            ]
+        )
+
+        # D. Tanda Segitiga Merah (Saran Jual)
+        points_sell = alt.Chart(df_chart.dropna(subset=['Saran_Jual'])).mark_point(
+            shape='triangle-down', size=180, color='#ff1744', filled=True, opacity=1
+        ).encode(
+            x='Waktu:T',
+            y='Saran_Jual:Q',
+            tooltip=[
+                alt.Tooltip('Waktu:T', title='Waktu Jual', format='%H:%M'),
+                alt.Tooltip('Saran_Jual:Q', title='🔴 SARAN JUAL (Take Profit)', format=',.0f')
+            ]
+        )
+
+        # Gabungkan semua garis dan titik segitiga menjadi 1 grafik interaktif
+        chart_final = alt.layer(line_low, line_high, points_buy, points_sell).interactive()
+        
+        # Tampilkan grafik ke layar HP
+        st.altair_chart(chart_final, use_container_width=True)
+        
+        # Panduan Eksekusi Visual
+        st.markdown("""
+        💡 **Cara Membaca Indikator di Grafik:**
+        * 🟢 **Segitiga Hijau Menunjuk ke Atas:** Sinyal **BUY!** Ini menandakan pada jam tersebut harga barang terdeteksi anjlok tajam $\ge 2\%$ di bawah rata-rata. Pasang *Buy Offer* di kisaran harga ini.
+        * 🔴 **Segitiga Merah Menunjuk ke Bawah:** Sinyal **SELL / TAKE PROFIT!** Harga sudah memantul naik ke titik puncaknya. Jika Anda sudah memegang barangnya, pasang *Sell Offer* di sekitar harga ini.
+        * 👆 *Tips HP:* Anda bisa sentuh/klik tepat di tanda segitiga tersebut untuk melihat nominal harga persisnya!
+        """)
+    else:
+        st.warning(f"Belum ada data grafik historis yang cukup untuk barang **{pilihan_nama}** pada interval waktu **{rentang_waktu}**.")
 
     st.divider()
     st.info(f"💡 Info: Perhitungan menggunakan total modal **{total_modal:,} GP** yang dibagi ke 3 slot GE (**{modal_per_slot:,.0f} GP per slot**).")
