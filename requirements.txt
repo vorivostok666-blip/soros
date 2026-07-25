@@ -3,4 +3,4 @@ pandas
 requests
 altair
 numpy
-google-generativeai
+vl-convert-python
