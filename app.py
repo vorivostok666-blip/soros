@@ -6,10 +6,22 @@ import altair as alt
 import numpy as np
 
 # Konfigurasi Tampilan Halaman Web (Responsif untuk HP)
-st.set_page_config(page_title="OSRS F2P Dip Bot", layout="centered")
+st.set_page_config(page_title="OSRS My Favorite Flips", layout="centered")
 
-st.title("📊 OSRS F2P Dip Trading Bot")
-st.write("Sinyal *trading* F2P + Logika Beli Aman (Maks 3% Vol Harian), Grafik Analisis (WIB) & Uji Akurasi Proyeksi.")
+st.title("⭐ OSRS Personal Flipping Radar")
+st.write("Sinyal *trading* otomatis yang **hanya memonitor daftar item favorit pribadi Anda**, lengkap dengan 3-Way Safety Lock & Grafik Analisis WIB.")
+
+# ==========================================
+# DAFTAR 22 ITEM FAVORIT PRIBADI (DARI RIWAYAT FLIPPING ANDA)
+# ==========================================
+MY_FAVORITE_ITEMS = [
+    "Coal", "Gold bar", "Soft clay", "Emerald", "Gold necklace", 
+    "Gold ore", "Chaos rune", "Ruby necklace", "Yew logs", 
+    "Bryophyta's staff (uncharged)", "Limpwurt root", "Adamantite ore", 
+    "Cosmic rune", "Uncut emerald", "Ham joint", "Steel bar", 
+    "Sapphire", "Death rune", "Uncut ruby", "Ruby", 
+    "Big bones", "Black skirt (g)"
+]
 
 # ==========================================
 # LOGIKA WAKTU & WARNA TOMBOL (KUNING / HIJAU)
@@ -54,8 +66,8 @@ st.sidebar.header("⚙️ Pengaturan Modal GE")
 total_modal = st.sidebar.number_input(
     "Masukkan Total Modal Anda (GP):", 
     min_value=10000, 
-    value=3000000,  # <-- DIPERBARUI: Default modal langsung di 3 Juta (3m)
-    step=100000,    # <-- DIPERBARUI: Kelipatan tombol naik jadi 100k per klik
+    value=3000000,  # Default modal 3m
+    step=100000,
     format="%d",
     help="Modal ini akan dibagi rata ke 3 slot aktif Grand Exchange."
 )
@@ -90,6 +102,9 @@ def fetch_market_data():
 
         master = df_1h.merge(df_24h, on='id').merge(df_latest, on='id').merge(df_map, on='id', how='inner')
         
+        # --- FILTER KHUSUS: HANYA AMBIL ITEM DARI DAFTAR FAVORIT ANDA ---
+        master = master[master['mappingname'].isin(MY_FAVORITE_ITEMS)].copy()
+        
         for col in ['Hourly_Low', 'Live_Low', 'Daily_Low', 'Daily_High', 'D_VolLow', 'H_VolLow', 'mappinglimit']:
             if col in master.columns:
                 master[col] = pd.to_numeric(master[col], errors='coerce').fillna(0)
@@ -107,21 +122,26 @@ if st.sidebar.button(btn_label):
     st.rerun()
 
 # Ambil data pasar utama
-with st.spinner('Memindai pasar untuk mencari barang laku...'):
+with st.spinner('Memindai harga live dari 22 barang favorit Anda...'):
     master_data = fetch_market_data()
 
 if not master_data.empty:
     
-    # Fungsi pemroses sinyal dengan 3-Way Safety Lock
-    def process_signals(df, threshold_multiplier, min_d_vol, min_h_vol, max_d_vol=float('inf'), sort_by_volume_score=False):
+    # ==========================================
+    # TAMPILAN 1 TABEL TUNGGAL: RADAR BARANG FAVORIT
+    # ==========================================
+    st.subheader("🔥 Radar Peluang: Daftar Item Favoritku")
+    st.write("Menampilkan barang dari daftar Anda yang sedang mengalami penurunan harga (*dip minimal 0.5%*), siap untuk dieksekusi:")
+
+    def process_favorite_signals(df):
+        # Kita pasang threshold ringan (1.005 atau turun 0.5%) dan volume min 1 
+        # agar barang langka seperti Bryophyta staff / Black skirt (g) tetap masuk saat dip
         filtered = df[
             (df['Live_Low'] > 0) & 
-            (df['Hourly_Low'] > (df['Live_Low'] * threshold_multiplier)) & 
+            (df['Hourly_Low'] > (df['Live_Low'] * 1.005)) & 
             (((df['Daily_Low'] + df['Daily_High']) / 2.0) > df['Live_Low']) & 
             ((df['Hourly_Low'] - df['Live_Low'] - df['Tax']) > 0) & 
-            (df['D_VolLow'] >= min_d_vol) & 
-            (df['D_VolLow'] <= max_d_vol) & 
-            (df['H_VolLow'] >= min_h_vol) & 
+            (df['D_VolLow'] >= 1) & 
             (df['Daily_High'] > df['Daily_Low'])
         ].copy()
 
@@ -130,6 +150,7 @@ if not master_data.empty:
 
         filtered['Untung_Per_Biji'] = filtered['Hourly_Low'] - filtered['Live_Low'] - filtered['Tax']
         
+        # 3-Way Safety Lock (Modal vs GE Limit vs 3% Vol Harian)
         def safe_calc_qty(row):
             price = row['Live_Low']
             limit = row['mappinglimit']
@@ -157,11 +178,8 @@ if not master_data.empty:
         filtered['Total_Untung_Slot'] = filtered['Untung_Per_Biji'] * filtered['Beli_Berapa_Biji']
         filtered['ROI_Persen'] = (filtered['Untung_Per_Biji'] / filtered['Live_Low']) * 100
         
-        if sort_by_volume_score:
-            filtered['Skor'] = filtered['Untung_Per_Biji'] * filtered['D_VolLow']
-            result = filtered.sort_values(by='Skor', ascending=False).head(3)
-        else:
-            result = filtered.sort_values(by='Total_Untung_Slot', ascending=False).head(3)
+        # Urutkan dari total untung per slot terbesar (Tanpa dibatasi Top 3, tampilkan semua!)
+        result = filtered.sort_values(by='Total_Untung_Slot', ascending=False)
         
         result = result.rename(columns={
             'mappingname': 'Nama Barang',
@@ -175,54 +193,26 @@ if not master_data.empty:
         
         return result[['Nama Barang', 'Harga Beli', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']]
 
-    # ==========================================
-    # TAMPILAN 1: JACKPOT (> 5% Anjlok, Vol < 100)
-    # ==========================================
-    st.subheader("🎯 Tabel 1: JACKPOT! Barang Sepi Anjlok Ekstrem (> 5%)")
-    df_jackpot = process_signals(master_data, threshold_multiplier=1.05, min_d_vol=1, min_h_vol=0, max_d_vol=100, sort_by_volume_score=False)
-    if not df_jackpot.empty:
-        st.success("🚨 ADA BARANG JACKPOT! Segera pasang Buy Offer sebelum keduluan pemain lain!")
-        st.dataframe(df_jackpot, use_container_width=True)
+    df_favorit = process_favorite_signals(master_data)
+    
+    if not df_favorit.empty:
+        st.dataframe(df_favorit, use_container_width=True)
     else:
-        st.info("Sedang tidak ada barang ber-volume rendah yang 'panic sell' saat ini.")
-
-    st.divider()
-
-    # ==========================================
-    # TAMPILAN 2: ANJLOK TAJAM (> 2% Anjlok)
-    # ==========================================
-    st.subheader("🔥 Tabel 2: Anjlok Tajam (> 2%)")
-    df_tajam = process_signals(master_data, threshold_multiplier=1.02, min_d_vol=500, min_h_vol=5, sort_by_volume_score=False)
-    if not df_tajam.empty:
-        st.dataframe(df_tajam, use_container_width=True)
-    else:
-        st.warning("Tidak ada item F2P yang anjlok di atas 2% saat ini.")
-
-    st.divider()
-
-    # ==========================================
-    # TAMPILAN 3: LONGGAR (> 0.5% Anjlok + Super Laris)
-    # ==========================================
-    st.subheader("⚡ Tabel 3: Turun Tipis tapi Super Laris (> 0.5%)")
-    df_laris = process_signals(master_data, threshold_multiplier=1.005, min_d_vol=1500, min_h_vol=15, sort_by_volume_score=True)
-    if not df_laris.empty:
-        st.dataframe(df_laris, use_container_width=True)
-    else:
-        st.warning("Tidak ada item super laris yang memenuhi kriteria saat ini.")
+        st.info("💡 Saat ini belum ada barang dari daftar favorit Anda yang sedang mengalami penurunan harga (*dip*). Semua harga sedang stabil di atas atau di pucuk.")
 
     st.divider()
 
     # ==========================================
     # FITUR GRAFIK: BACKTESTING AKURASI PROYEKSI VS REALITA (WIB)
     # ==========================================
-    st.header("📈 Uji Akurasi Proyeksi vs Realita (Waktu WIB)")
-    st.write("Sistem memotong data masa lalu untuk meramal harga masa kini, lalu membandingkannya dengan **Harga Kenyataan (Realita)** untuk menghitung seberapa akurat tren algoritmanya.")
+    st.header("📈 Analisis Grafik & Proyeksi (Waktu WIB)")
+    st.write("Pilih barang dari daftar pribadi Anda untuk melihat riwayat harga, titik masuk/keluar, dan uji akurasi tren.")
 
     daftar_item = master_data.sort_values(by='mappingname')[['id', 'mappingname']].drop_duplicates()
     
     col1, col2 = st.columns([3, 1])
     with col1:
-        pilihan_nama = st.selectbox("Pilih Barang F2P:", daftar_item['mappingname'].tolist(), index=0)
+        pilihan_nama = st.selectbox("Pilih Barang Favorit Anda:", daftar_item['mappingname'].tolist(), index=0)
     with col2:
         rentang_waktu = st.selectbox("Interval:", ["5m", "1h", "6h", "24h"], index=1, help="5m=5 menit, 1h=1 jam")
 
@@ -370,9 +360,9 @@ if not master_data.empty:
         st.altair_chart(chart_final, use_container_width=True)
         
         st.markdown("""
-        💡 **Tips Modal 3 Juta GP:**
-        * 🛡️ **Jangan Kaget Jika Sisa Uang Banyak:** Jika Anda membeli barang murah, uang di slot tidak akan habis terpakai karena dibatasi aturan resmi Jagex (Buy Limit). Ini adalah hal normal agar Anda tidak dicurigai sebagai bot oleh sistem OSRS!
-        * 🚀 **Fokus Barang Mahal:** Untuk menghabiskan 1 Juta GP per slot dengan cepat, pilih barang-barang yang harganya di atas **500 GP** (seperti perlengkapan *Rune/Adamant*, *Runite ore*, atau *Swordfish*).
+        💡 **Panduan Eksekusi Radar Favorit:**
+        * 🔥 **Fokus Pada Daftar Anda:** Kapan pun salah satu dari 22 barang Anda mengalami penurunan harga wajar, barang itu akan langsung muncul di tabel atas tanpa terhalang filter volume.
+        * 🛡️ **Proteksi Likuiditas Tetap Aktif:** Walaupun volume tidak dibatasi di tabel, kolom **Jml Beli** tetap dipotong maksimal 3% dari volume harian. Jadi kalau Anda mau beli *Black skirt (g)*, sistem akan dengan bijak menyuruh Anda beli 1 atau 2 biji saja (sesuai amanat pasar).
         """)
     else:
         st.warning(f"Belum ada data grafik historis yang cukup untuk barang **{pilihan_nama}** pada interval waktu **{rentang_waktu}**.")
