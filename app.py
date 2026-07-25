@@ -10,6 +10,12 @@ st.set_page_config(page_title="OSRS F2P Global Flipping Radar", layout="centered
 
 st.title("⭐ OSRS Global F2P Flipping Radar")
 st.write("Sinyal *trading* otomatis untuk **SEMUA ITEM F2P OSRS** dengan 4 Radar Terpisah & Dual Chart (Modal 8 Juta GP).")
+st.caption(
+    "ℹ️ Kolom **Maks Beli (BEP)** = batas harga beli tertinggi sebelum kamu balik modal (breakeven), "
+    "dihitung dari Harga Jual dikurangi Pajak GE. Kalau kamu naikkan harga beli untuk mempercepat fill, "
+    "jangan sampai melewati angka ini. Kolom **Status Harga** menandai seberapa lega ruang kenaikannya: "
+    "🟢 Aman Dinaikkan (≥2% dari Harga Beli) · 🟡 Pas-pasan (0.5%–2%) · 🔴 Jangan Naikkan (<0.5%, nyaris tidak ada ruang)."
+)
 
 # ==========================================
 # FUNGSI MENGAMBIL SEMUA ITEM F2P DARI API WIKI
@@ -77,14 +83,19 @@ def fetch_dip_verification(item_id):
         'monthly_median_vol_high': 0,
         'daily_median_vol_low': 0,
         'daily_median_vol_high': 0,
-        'ok': False
+        'error': None
     }
-    try:
-        num_cols = ['avgHighPrice', 'avgLowPrice', 'highPriceVolume', 'lowPriceVolume']
+    num_cols = ['avgHighPrice', 'avgLowPrice', 'highPriceVolume', 'lowPriceVolume']
+    errors = []
 
-        # --- Histori per jam, ambil ~14 hari terakhir (biweekly floor) ---
+    # --- Histori per jam, ambil ~14 hari terakhir (biweekly floor) ---
+    # Panggilan ini independen dari panggilan 24h di bawah — kalau salah satu
+    # gagal (timeout/rate limit), yang lain tetap bisa dipakai.
+    try:
         url_1h = f"https://prices.runescape.wiki/api/v1/osrs/timeseries?timestep=1h&id={item_id}"
-        data_1h = requests.get(url_1h, headers=headers, timeout=10).json().get('data', [])
+        resp_1h = requests.get(url_1h, headers=headers, timeout=15)
+        resp_1h.raise_for_status()
+        data_1h = resp_1h.json().get('data', [])
         if data_1h:
             df1h = pd.DataFrame(data_1h).tail(14 * 24)
             for c in num_cols:
@@ -96,10 +107,17 @@ def fetch_dip_verification(item_id):
                 hasil['biweekly_floor'] = (min_high + min_low) / 2.0
             hasil['daily_median_vol_low'] = float(df1h['lowPriceVolume'].tail(24).median(skipna=True) or 0) if 'lowPriceVolume' in df1h else 0
             hasil['daily_median_vol_high'] = float(df1h['highPriceVolume'].tail(24).median(skipna=True) or 0) if 'highPriceVolume' in df1h else 0
+        else:
+            errors.append("1h: respons API kosong")
+    except Exception as e:
+        errors.append(f"1h: {type(e).__name__}")
 
-        # --- Histori per hari, ambil 30 hari terakhir (monthly floor) ---
+    # --- Histori per hari, ambil 30 hari terakhir (monthly floor) ---
+    try:
         url_24h = f"https://prices.runescape.wiki/api/v1/osrs/timeseries?timestep=24h&id={item_id}"
-        data_24h = requests.get(url_24h, headers=headers, timeout=10).json().get('data', [])
+        resp_24h = requests.get(url_24h, headers=headers, timeout=15)
+        resp_24h.raise_for_status()
+        data_24h = resp_24h.json().get('data', [])
         if data_24h:
             df24h = pd.DataFrame(data_24h).tail(30)
             for c in num_cols:
@@ -111,10 +129,12 @@ def fetch_dip_verification(item_id):
                 hasil['monthly_floor'] = (min_high + min_low) / 2.0
             hasil['monthly_median_vol_low'] = float(df24h['lowPriceVolume'].median(skipna=True) or 0) if 'lowPriceVolume' in df24h else 0
             hasil['monthly_median_vol_high'] = float(df24h['highPriceVolume'].median(skipna=True) or 0) if 'highPriceVolume' in df24h else 0
+        else:
+            errors.append("24h: respons API kosong")
+    except Exception as e:
+        errors.append(f"24h: {type(e).__name__}")
 
-        hasil['ok'] = True
-    except Exception:
-        pass
+    hasil['error'] = "; ".join(errors) if errors else None
     return hasil
 
 # ==========================================
@@ -211,6 +231,24 @@ if not master_data.empty:
         df = df[df['Beli_Berapa_Biji'] > 0].copy()
         df['Total_Untung_Slot'] = df['Untung_Per_Biji'] * df['Beli_Berapa_Biji']
         df['ROI_Persen'] = (df['Untung_Per_Biji'] / df['Live_Low']) * 100
+
+        # --- Batas aman menaikkan harga beli ---
+        # Kalau kamu naikkan harga beli (Live_Low) supaya order lebih cepat fill,
+        # jangan sampai melewati titik breakeven ini: Harga Jual - Pajak.
+        # Di atas angka ini, order tetap akan laku tapi kamu justru RUGI walau
+        # sudah kena pajak GE (pajak dipotong dari sisi JUAL, bukan ditambah ke beli).
+        df['Batas_Beli_Maks'] = df['Hourly_Low'] - df['Tax']
+        df['Ruang_Naik_Persen'] = ((df['Batas_Beli_Maks'] - df['Live_Low']) / df['Live_Low']) * 100
+
+        def tanda_ruang(pct):
+            if pct >= 2:
+                return '🟢 Aman Dinaikkan'
+            elif pct >= 0.5:
+                return '🟡 Pas-pasan'
+            else:
+                return '🔴 Jangan Naikkan'
+        df['Tanda_Ruang_Naik'] = df['Ruang_Naik_Persen'].apply(tanda_ruang)
+
         return df
 
     # ==========================================
@@ -229,8 +267,8 @@ if not master_data.empty:
     if not df_f2p_2pct.empty:
         df_f2p_2pct['Untung_Per_Biji'] = df_f2p_2pct['Hourly_Low'] - df_f2p_2pct['Live_Low'] - df_f2p_2pct['Tax']
         res_f2p1 = apply_safety_lock(df_f2p_2pct).sort_values(by='Total_Untung_Slot', ascending=False)
-        res_f2p1_display = res_f2p1.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian'})
-        st.dataframe(res_f2p1_display[['Nama Barang', 'Harga Beli', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
+        res_f2p1_display = res_f2p1.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga'})
+        st.dataframe(res_f2p1_display[['Nama Barang', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
     else:
         res_f2p1 = pd.DataFrame()
         st.warning("⏳ Tidak ada item F2P yang sedang anjlok > 2% saat ini.")
@@ -254,8 +292,8 @@ if not master_data.empty:
     if not df_f2p_05pct.empty:
         df_f2p_05pct['Untung_Per_Biji'] = df_f2p_05pct['Hourly_Low'] - df_f2p_05pct['Live_Low'] - df_f2p_05pct['Tax']
         res_f2p2 = apply_safety_lock(df_f2p_05pct).sort_values(by='Total_Untung_Slot', ascending=False)
-        res_f2p2_display = res_f2p2.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian'})
-        st.dataframe(res_f2p2_display[['Nama Barang', 'Harga Beli', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
+        res_f2p2_display = res_f2p2.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga'})
+        st.dataframe(res_f2p2_display[['Nama Barang', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
     else:
         res_f2p2 = pd.DataFrame()
         st.info("💡 Tidak ada item F2P yang sedang turun tipis (0.5%-2%) saat ini.")
@@ -280,9 +318,9 @@ if not master_data.empty:
 
     if not df_f2p_jackpot.empty:
         res_f2p_jack = apply_safety_lock(df_f2p_jackpot).sort_values(by='Total_Untung_Slot', ascending=False)
-        res_f2p_jack = res_f2p_jack.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian'})
+        res_f2p_jack = res_f2p_jack.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga'})
         st.success("🚨 ADA PELUANG SULTAN F2P YANG WORTH-IT!")
-        st.dataframe(res_f2p_jack[['Nama Barang', 'Harga Beli', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
+        st.dataframe(res_f2p_jack[['Nama Barang', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
     else:
         st.info("💡 Sedang tidak ada barang Sultan F2P ber-margin besar saat ini.")
 
@@ -312,6 +350,7 @@ if not master_data.empty:
             ).head(int(max_kandidat_verifikasi))
 
             hasil_verifikasi = []
+            log_diagnostik = []
             total_kandidat = len(kandidat_shock)
             progress_bar = st.progress(0, text="Memverifikasi histori harga...")
 
@@ -321,9 +360,7 @@ if not master_data.empty:
                     (idx + 1) / total_kandidat,
                     text=f"Memverifikasi {row['mappingname']} ({idx + 1}/{total_kandidat})..."
                 )
-
-                if not v['ok']:
-                    continue
+                time.sleep(0.15)  # jeda kecil antar item, biar tidak membebani/kena limit API wiki
 
                 lolos_biweekly = (v['biweekly_floor'] is not None) and (row['Live_Low'] < v['biweekly_floor'])
                 lolos_monthly = (v['monthly_floor'] is not None) and (row['Live_Low'] < v['monthly_floor'])
@@ -332,8 +369,22 @@ if not master_data.empty:
                     v['daily_median_vol_low'] > 0 and v['daily_median_vol_high'] > 0
                 )
                 lolos_profit_min = row['Total_Untung_Slot'] >= min_profit_total
+                lolos_semua = lolos_biweekly and lolos_monthly and lolos_likuiditas and lolos_profit_min
 
-                if lolos_biweekly and lolos_monthly and lolos_likuiditas and lolos_profit_min:
+                log_diagnostik.append({
+                    'Nama Barang': row['mappingname'],
+                    'Harga Skrg': row['Live_Low'],
+                    'Floor 14 Hari': round(v['biweekly_floor']) if v['biweekly_floor'] is not None else None,
+                    'Floor 30 Hari': round(v['monthly_floor']) if v['monthly_floor'] is not None else None,
+                    '14 Hari?': '✅' if lolos_biweekly else '❌',
+                    '30 Hari?': '✅' if lolos_monthly else '❌',
+                    'Likuid?': '✅' if lolos_likuiditas else '❌',
+                    'Profit Min?': '✅' if lolos_profit_min else '❌',
+                    'Status': '🟢 LOLOS' if lolos_semua else '⛔ Gagal',
+                    'Error API': v['error'] if v['error'] else '-'
+                })
+
+                if lolos_semua:
                     hasil_verifikasi.append(row)
 
             progress_bar.empty()
@@ -343,15 +394,25 @@ if not master_data.empty:
                 df_verified = df_verified.rename(columns={
                     'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual',
                     'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung',
-                    'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian'
+                    'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian',
+                    'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga'
                 })
                 st.success(f"✅ {len(df_verified)} item lolos verifikasi shock dip historis!")
                 st.dataframe(
-                    df_verified[['Nama Barang', 'Harga Beli', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']],
+                    df_verified[['Nama Barang', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']],
                     use_container_width=True
                 )
             else:
                 st.info("💡 Tidak ada kandidat yang lolos verifikasi historis ketat saat ini. Coba lagi nanti, atau turunkan ambang profit minimum / naikkan jumlah kandidat di sidebar.")
+
+            with st.expander(f"🔍 Detail Diagnostik ({total_kandidat} kandidat diperiksa) — cek di sini kalau tabel di atas kosong"):
+                st.caption(
+                    "Kalau kolom 'Error API' terisi untuk banyak baris, berarti tabel kosong karena masalah "
+                    "koneksi/API — coba lagi nanti. Kalau 'Error API' kosong tapi tetap ❌ di kolom 14/30 Hari, "
+                    "berarti memang belum ada shock dip beneran saat ini (bukan bug) — item cuma turun dalam "
+                    "konteks jangka pendek, tapi belum memecahkan rekor terendah 14/30 hari."
+                )
+                st.dataframe(pd.DataFrame(log_diagnostik), use_container_width=True)
         else:
             st.info("💡 Tidak ada kandidat dari Tabel 1 & 2 untuk diverifikasi saat ini.")
     else:
