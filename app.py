@@ -9,7 +9,7 @@ import numpy as np
 st.set_page_config(page_title="OSRS My Favorite Flips", layout="centered")
 
 st.title("⭐ OSRS Personal Flipping Radar")
-st.write("Sinyal *trading* otomatis yang **hanya memonitor daftar item favorit pribadi Anda**, lengkap dengan 3-Way Safety Lock & Grafik Analisis WIB.")
+st.write("Sinyal *trading* otomatis yang **memantau seluruh 22 item favorit pribadi Anda tanpa pengecualian**, diurutkan dari profit terbesar.")
 
 # ==========================================
 # DAFTAR 22 ITEM FAVORIT PRIBADI (DARI RIWAYAT FLIPPING ANDA)
@@ -128,21 +128,16 @@ with st.spinner('Memindai harga live dari 22 barang favorit Anda...'):
 if not master_data.empty:
     
     # ==========================================
-    # TAMPILAN 1 TABEL TUNGGAL: RADAR BARANG FAVORIT
+    # TAMPILAN 1 TABEL TUNGGAL: SEMUA BARANG FAVORIT DIURUTKAN
     # ==========================================
-    st.subheader("🔥 Radar Peluang: Daftar Item Favoritku")
-    st.write("Menampilkan barang dari daftar Anda yang sedang mengalami penurunan harga (*dip minimal 0.5%*), siap untuk dieksekusi:")
+    st.subheader("🔥 Radar Peluang: Seluruh Daftar Favoritku")
+    st.write("Menampilkan **semua barang dari daftar Anda tanpa ada yang disembunyikan**, diurutkan dari potensi profit slot terbesar:")
 
     def process_favorite_signals(df):
-        # Kita pasang threshold ringan (1.005 atau turun 0.5%) dan volume min 1 
-        # agar barang langka seperti Bryophyta staff / Black skirt (g) tetap masuk saat dip
+        # Filter dip dan volume DICOPOT TOTAL agar semua 22 barang selalu muncul
         filtered = df[
             (df['Live_Low'] > 0) & 
-            (df['Hourly_Low'] > (df['Live_Low'] * 1.005)) & 
-            (((df['Daily_Low'] + df['Daily_High']) / 2.0) > df['Live_Low']) & 
-            ((df['Hourly_Low'] - df['Live_Low'] - df['Tax']) > 0) & 
-            (df['D_VolLow'] >= 1) & 
-            (df['Daily_High'] > df['Daily_Low'])
+            (df['Hourly_Low'] > 0)
         ].copy()
 
         if filtered.empty:
@@ -155,8 +150,10 @@ if not master_data.empty:
             price = row['Live_Low']
             limit = row['mappinglimit']
             vol_harian = row['D_VolLow']
+            untung = row['Untung_Per_Biji']
             
-            if price <= 0:
+            # Jika harga tidak valid atau saat ini sedang rugi/0 profit, sarankan beli 0
+            if price <= 0 or untung <= 0:
                 return 0
             
             max_afford = modal_per_slot / price
@@ -170,15 +167,14 @@ if not master_data.empty:
             return int(max(qty_aman, 0))
 
         filtered['Beli_Berapa_Biji'] = filtered.apply(safe_calc_qty, axis=1)
-        filtered = filtered[filtered['Beli_Berapa_Biji'] > 0].copy()
-        
-        if filtered.empty:
-            return pd.DataFrame()
-
         filtered['Total_Untung_Slot'] = filtered['Untung_Per_Biji'] * filtered['Beli_Berapa_Biji']
-        filtered['ROI_Persen'] = (filtered['Untung_Per_Biji'] / filtered['Live_Low']) * 100
         
-        # Urutkan dari total untung per slot terbesar (Tanpa dibatasi Top 3, tampilkan semua!)
+        # Hitung ROI (%) dengan aman
+        filtered['ROI_Persen'] = filtered.apply(
+            lambda r: (r['Untung_Per_Biji'] / r['Live_Low']) * 100 if r['Live_Low'] > 0 else 0, axis=1
+        )
+        
+        # Urutkan mutlak dari total untung per slot terbesar ke terkecil
         result = filtered.sort_values(by='Total_Untung_Slot', ascending=False)
         
         result = result.rename(columns={
@@ -198,7 +194,7 @@ if not master_data.empty:
     if not df_favorit.empty:
         st.dataframe(df_favorit, use_container_width=True)
     else:
-        st.info("💡 Saat ini belum ada barang dari daftar favorit Anda yang sedang mengalami penurunan harga (*dip*). Semua harga sedang stabil di atas atau di pucuk.")
+        st.info("💡 Data pasar sedang diproses oleh API Wiki.")
 
     st.divider()
 
@@ -360,9 +356,9 @@ if not master_data.empty:
         st.altair_chart(chart_final, use_container_width=True)
         
         st.markdown("""
-        💡 **Panduan Eksekusi Radar Favorit:**
-        * 🔥 **Fokus Pada Daftar Anda:** Kapan pun salah satu dari 22 barang Anda mengalami penurunan harga wajar, barang itu akan langsung muncul di tabel atas tanpa terhalang filter volume.
-        * 🛡️ **Proteksi Likuiditas Tetap Aktif:** Walaupun volume tidak dibatasi di tabel, kolom **Jml Beli** tetap dipotong maksimal 3% dari volume harian. Jadi kalau Anda mau beli *Black skirt (g)*, sistem akan dengan bijak menyuruh Anda beli 1 atau 2 biji saja (sesuai amanat pasar).
+        💡 **Cara Membaca Radar Favorit Baru:**
+        * 🔥 **Semua Muncul Diurutan:** Barang dengan potensi untung tertinggi saat ini akan berada di baris nomor 1, terus ke bawah sampai barang yang saat ini sedang tidak berpotensi untung (profit 0 / minus).
+        * 🛡️ **Jml Beli Tetap Cerdas:** Jika ada barang yang saat ini margin jual-belinya sedang minus atau sama dengan 0, kolom **Jml Beli** otomatis akan menampilkan angka **0** untuk mencegah Anda rugi.
         """)
     else:
         st.warning(f"Belum ada data grafik historis yang cukup untuk barang **{pilihan_nama}** pada interval waktu **{rentang_waktu}**.")
