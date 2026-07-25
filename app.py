@@ -380,6 +380,11 @@ if not master_data.empty:
                 df_chart['Waktu'] = pd.to_datetime(df_chart['timestamp'], unit='s', utc=True).dt.tz_convert('Asia/Jakarta').dt.tz_localize(None)
                 df_chart['avgLowPrice'] = df_chart['avgLowPrice'].ffill().bfill()
                 df_chart['avgHighPrice'] = df_chart['avgHighPrice'].ffill().bfill()
+                for vcol in ['lowPriceVolume', 'highPriceVolume']:
+                    if vcol in df_chart.columns:
+                        df_chart[vcol] = pd.to_numeric(df_chart[vcol], errors='coerce').fillna(0)
+                    else:
+                        df_chart[vcol] = 0
                 return df_chart
         except Exception:
             pass
@@ -395,6 +400,19 @@ if not master_data.empty:
             df_c['Saran_Beli'] = df_c.apply(lambda r: r['avgLowPrice'] if r['avgLowPrice'] < (r['MA_Low'] / 1.02) else None, axis=1)
             df_c['Saran_Jual'] = df_c.apply(lambda r: r['avgHighPrice'] if r['avgHighPrice'] > (r['MA_High'] * 1.015) else None, axis=1)
 
+            # --- Deteksi lonjakan volume (konfirmasi shock, bukan cuma noise) ---
+            # Total_Vol = gabungan volume transaksi Low + High per periode.
+            # Vol_MA = rata-rata volume 6 periode SEBELUMNYA (di-shift, supaya
+            # periode saat ini tidak ikut mempengaruhi baseline-nya sendiri).
+            df_c['Total_Vol'] = df_c['lowPriceVolume'] + df_c['highPriceVolume']
+            df_c['Vol_MA'] = df_c['Total_Vol'].rolling(window=6, min_periods=1).mean().shift(1)
+            vol_now = df_c['Total_Vol'].iloc[-1]
+            vol_baseline = df_c['Vol_MA'].iloc[-1]
+            if pd.notna(vol_baseline) and vol_baseline > 0:
+                rasio_vol = vol_now / vol_baseline
+            else:
+                rasio_vol = None
+
             test_steps = min(6, int(len(df_c) * 0.2))
             train_end = len(df_c) - test_steps
             train_d = df_c.iloc[max(0, train_end-15):train_end].copy()
@@ -402,7 +420,8 @@ if not master_data.empty:
             
             df_eval = pd.DataFrame(columns=['Waktu', 'Proyeksi_Beli', 'Proyeksi_Jual'])
             acc_l, acc_h = 0.0, 0.0
-            if len(train_d) > 2:
+            ada_forecast = len(train_d) > 2
+            if ada_forecast:
                 x_tr = np.arange(len(train_d))
                 p_l = np.polyfit(x_tr, train_d['avgLowPrice'], 1)
                 p_h = np.polyfit(x_tr, train_d['avgHighPrice'], 1)
@@ -417,9 +436,18 @@ if not master_data.empty:
                 acc_l = max(0.0, 100.0 - err_l)
                 acc_h = max(0.0, 100.0 - err_h)
 
-                c1, c2 = st.columns(2)
+            if ada_forecast:
+                c1, c2, c3 = st.columns(3)
                 c1.metric(f"🎯 Akurasi Beli ({timestep_label})", f"{acc_l:.1f}%")
                 c2.metric(f"🎯 Akurasi Jual ({timestep_label})", f"{acc_h:.1f}%")
+            else:
+                c3 = st.columns(1)[0]
+
+            if rasio_vol is not None:
+                label_vol = "🚀 Lonjakan Volume!" if rasio_vol >= 2 else ("📈 Sedikit Naik" if rasio_vol >= 1.2 else "➖ Normal/Sepi")
+                c3.metric("📊 Volume vs Rata-rata", f"{rasio_vol:.1f}x", label_vol)
+            else:
+                c3.metric("📊 Volume vs Rata-rata", "N/A")
 
             l_low = alt.Chart(df_c).mark_line(color='#00a8ff', strokeWidth=2).encode(x=alt.X('Waktu:T', title='Waktu (WIB)'), y=alt.Y('avgLowPrice:Q', title='Harga (GP)', scale=alt.Scale(zero=False)))
             l_high = alt.Chart(df_c).mark_line(color='#e84118', strokeWidth=2).encode(x='Waktu:T', y='avgHighPrice:Q')
@@ -430,6 +458,17 @@ if not master_data.empty:
 
             final_chart = alt.layer(l_low, l_high, l_f_low, l_f_high, pt_buy, pt_sell).interactive()
             st.altair_chart(final_chart, use_container_width=True)
+
+            # --- Bar chart volume (konfirmasi visual shock vs noise) ---
+            st.caption("📊 Volume transaksi per periode — cari **batang yang mendadak jauh lebih tinggi** dari batang-batang di sekitarnya, itu tanda shock beneran (bandingkan posisinya dengan titik jatuhnya harga di grafik atas).")
+            bar_vol = alt.Chart(df_c).mark_bar(color='#a4b0be').encode(
+                x=alt.X('Waktu:T', title='Waktu (WIB)'),
+                y=alt.Y('Total_Vol:Q', title='Volume (Low+High)')
+            )
+            line_vol_ma = alt.Chart(df_c).mark_line(color='#2f3542', strokeDash=[3, 3], strokeWidth=1.5).encode(
+                x='Waktu:T', y='Vol_MA:Q'
+            )
+            st.altair_chart(alt.layer(bar_vol, line_vol_ma).interactive(), use_container_width=True)
         else:
             st.warning(f"Data historis tidak cukup untuk interval {timestep_label}.")
 
