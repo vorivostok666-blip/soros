@@ -6,33 +6,53 @@ import altair as alt
 import numpy as np
 
 # Konfigurasi Tampilan Halaman Web (Responsif untuk HP)
-st.set_page_config(page_title="OSRS Personal Flipping Radar", layout="centered")
+st.set_page_config(page_title="OSRS F2P Global Flipping Radar", layout="centered")
 
-st.title("⭐ OSRS Personal Flipping Radar")
-st.write("Sinyal *trading* otomatis dengan **3 Radar Terpisah** & **Dual Chart (5m & 1h Sekaligus)** (Modal 8 Juta GP).")
-
-# ==========================================
-# 1. DAFTAR 19 ITEM FAVORIT REGULER (VOLUME / HARIAN)
-# ==========================================
-REGULAR_FAVORITES = [
-    "Coal", "Gold bar", "Soft clay", "Emerald", "Gold necklace", 
-    "Gold ore", "Chaos rune", "Ruby necklace", "Yew logs", 
-    "Limpwurt root", "Adamantite ore", "Cosmic rune", "Uncut emerald", 
-    "Steel bar", "Sapphire", "Death rune", "Uncut ruby", "Ruby", "Big bones"
-]
+st.title("⭐ OSRS Global F2P Flipping Radar")
+st.write("Sinyal *trading* otomatis untuk **SEMUA ITEM F2P OSRS** dengan 3 Radar Terpisah & Dual Chart (Modal 8 Juta GP).")
 
 # ==========================================
-# 2. DAFTAR ITEM SULTAN / JACKPOT (LANGKA & MARGIN RAKSASA)
+# FUNGSI MENGAMBIL SEMUA ITEM F2P DARI API WIKI
 # ==========================================
-JACKPOT_ITEMS = [
-    "Bryophyta's staff (uncharged)", "Ham joint", "Black skirt (g)",
-    "Hill giant club", "Rune 2h sword", "Rune platebody (g)", 
-    "Rune platebody (t)", "Zamorak platebody", "Saradomin platebody", 
-    "Guthix platebody", "Rune full helm (g)", "Rune kiteshield (g)",
-    "Gilded platebody", "Gilded full helm"
-]
+@st.cache_data(ttl=60)
+def fetch_market_data():
+    headers = {'User-Agent': 'Belajar_Data_Analisis_Bot_Lokal'}
+    try:
+        # 1. Ambil Mapping dan filter HANYA F2P (members == False)
+        req_map = requests.get('https://prices.runescape.wiki/api/v1/osrs/mapping', headers=headers)
+        df_map = pd.DataFrame(req_map.json())[['id', 'name', 'limit', 'members']]
+        df_map = df_map[df_map['members'] == False]
+        df_map.rename(columns={'name': 'mappingname', 'limit': 'mappinglimit'}, inplace=True)
 
-ALL_MONITORED_ITEMS = REGULAR_FAVORITES + JACKPOT_ITEMS
+        # 2. Ambil Data Harga 1h, 24h, Latest
+        req_1h = requests.get('https://prices.runescape.wiki/api/v1/osrs/1h', headers=headers)
+        df_1h = pd.DataFrame.from_dict(req_1h.json()['data'], orient='index').reset_index()
+        df_1h.rename(columns={'index': 'id', 'avgLowPrice': 'Hourly_Low', 'lowPriceVolume': 'H_VolLow'}, inplace=True)
+
+        req_24h = requests.get('https://prices.runescape.wiki/api/v1/osrs/24h', headers=headers)
+        df_24h = pd.DataFrame.from_dict(req_24h.json()['data'], orient='index').reset_index()
+        df_24h.rename(columns={'index': 'id', 'avgLowPrice': 'Daily_Low', 'avgHighPrice': 'Daily_High', 'lowPriceVolume': 'D_VolLow'}, inplace=True)
+
+        req_latest = requests.get('https://prices.runescape.wiki/api/v1/osrs/latest', headers=headers)
+        df_latest = pd.DataFrame.from_dict(req_latest.json()['data'], orient='index').reset_index()
+        df_latest.rename(columns={'index': 'id', 'low': 'Live_Low', 'high': 'Live_High'}, inplace=True)
+
+        for df in [df_1h, df_24h, df_latest, df_map]:
+            df['id'] = pd.to_numeric(df['id'], errors='coerce').fillna(0).astype(int)
+
+        # Gabungkan semua data berdasarkan ID F2P
+        master = df_1h.merge(df_24h, on='id').merge(df_latest, on='id').merge(df_map, on='id', how='inner')
+        
+        for col in ['Hourly_Low', 'Live_Low', 'Daily_Low', 'Daily_High', 'D_VolLow', 'H_VolLow', 'mappinglimit']:
+            if col in master.columns:
+                master[col] = pd.to_numeric(master[col], errors='coerce').fillna(0)
+
+        # Hitung Pajak GE (2% untuk item di atas 100 GP)
+        master['Tax'] = master['Hourly_Low'].apply(lambda x: 0 if x < 100 else round((x * 0.02) - 0.5))
+        return master
+    except Exception as e:
+        st.error(f"Gagal mengambil data API: {e}")
+        return pd.DataFrame()
 
 # ==========================================
 # LOGIKA WAKTU & WARNA TOMBOL (KUNING / HIJAU)
@@ -86,50 +106,12 @@ total_modal = st.sidebar.number_input(
 modal_per_slot = total_modal / 3
 st.sidebar.info(f"💰 Modal per Slot (3 Slot): **{modal_per_slot:,.0f} GP**")
 
-# Fungsi untuk mengambil data pasar dari API Wiki
-@st.cache_data(ttl=60)
-def fetch_market_data():
-    headers = {'User-Agent': 'Belajar_Data_Analisis_Bot_Lokal'}
-    try:
-        req_map = requests.get('https://prices.runescape.wiki/api/v1/osrs/mapping', headers=headers)
-        df_map = pd.DataFrame(req_map.json())[['id', 'name', 'limit', 'members']]
-        df_map = df_map[df_map['members'] == False]
-        df_map.rename(columns={'name': 'mappingname', 'limit': 'mappinglimit'}, inplace=True)
-
-        req_1h = requests.get('https://prices.runescape.wiki/api/v1/osrs/1h', headers=headers)
-        df_1h = pd.DataFrame.from_dict(req_1h.json()['data'], orient='index').reset_index()
-        df_1h.rename(columns={'index': 'id', 'avgLowPrice': 'Hourly_Low', 'lowPriceVolume': 'H_VolLow'}, inplace=True)
-
-        req_24h = requests.get('https://prices.runescape.wiki/api/v1/osrs/24h', headers=headers)
-        df_24h = pd.DataFrame.from_dict(req_24h.json()['data'], orient='index').reset_index()
-        df_24h.rename(columns={'index': 'id', 'avgLowPrice': 'Daily_Low', 'avgHighPrice': 'Daily_High', 'lowPriceVolume': 'D_VolLow'}, inplace=True)
-
-        req_latest = requests.get('https://prices.runescape.wiki/api/v1/osrs/latest', headers=headers)
-        df_latest = pd.DataFrame.from_dict(req_latest.json()['data'], orient='index').reset_index()
-        df_latest.rename(columns={'index': 'id', 'low': 'Live_Low', 'high': 'Live_High'}, inplace=True)
-
-        for df in [df_1h, df_24h, df_latest, df_map]:
-            df['id'] = pd.to_numeric(df['id'], errors='coerce').fillna(0).astype(int)
-
-        master = df_1h.merge(df_24h, on='id').merge(df_latest, on='id').merge(df_map, on='id', how='inner')
-        master = master[master['mappingname'].isin(ALL_MONITORED_ITEMS)].copy()
-        
-        for col in ['Hourly_Low', 'Live_Low', 'Daily_Low', 'Daily_High', 'D_VolLow', 'H_VolLow', 'mappinglimit']:
-            if col in master.columns:
-                master[col] = pd.to_numeric(master[col], errors='coerce').fillna(0)
-
-        master['Tax'] = master['Hourly_Low'].apply(lambda x: 0 if x < 100 else round((x * 0.02) - 0.5))
-        return master
-    except Exception as e:
-        st.error(f"Gagal mengambil data API: {e}")
-        return pd.DataFrame()
-
 if st.sidebar.button(btn_label):
     fetch_market_data.clear()
     st.session_state['last_update'] = time.time()
     st.rerun()
 
-with st.spinner('Memindai pasar untuk daftar reguler dan barang sultan Anda...'):
+with st.spinner('Memindai seluruh pasar F2P OSRS...'):
     master_data = fetch_market_data()
 
 if not master_data.empty:
@@ -152,77 +134,87 @@ if not master_data.empty:
         df['ROI_Persen'] = (df['Untung_Per_Biji'] / df['Live_Low']) * 100
         return df
 
-    # TABEL 1
-    st.subheader("🔥 Tabel 1: Favorit Reguler (Anjlok Tajam > 2%)")
-    df_reguler = master_data[master_data['mappingname'].isin(REGULAR_FAVORITES)].copy()
-    df_reg_2pct = df_reguler[
-        (df_reguler['Live_Low'] > 0) & 
-        (df_reguler['Hourly_Low'] > (df_reguler['Live_Low'] * 1.02)) & 
-        (((df_reguler['Daily_Low'] + df_reguler['Daily_High']) / 2.0) > df_reguler['Live_Low']) & 
-        ((df_reguler['Hourly_Low'] - df_reguler['Live_Low'] - df_reguler['Tax']) > 0)
+    # ==========================================
+    # TABEL 1: SEMUA ITEM F2P (ANJLOK > 2%)
+    # ==========================================
+    st.subheader("🔥 Tabel 1: Global F2P — Anjlok Tajam (> 2%)")
+    st.write("Semua barang F2P di game yang sedang mengalami diskon besar dan menguntungkan:")
+
+    df_f2p_2pct = master_data[
+        (master_data['Live_Low'] > 0) & 
+        (master_data['Hourly_Low'] > (master_data['Live_Low'] * 1.02)) & 
+        (((master_data['Daily_Low'] + master_data['Daily_High']) / 2.0) > master_data['Live_Low']) & 
+        ((master_data['Hourly_Low'] - master_data['Live_Low'] - master_data['Tax']) > 0)
     ].copy()
 
-    if not df_reg_2pct.empty:
-        df_reg_2pct['Untung_Per_Biji'] = df_reg_2pct['Hourly_Low'] - df_reg_2pct['Live_Low'] - df_reg_2pct['Tax']
-        res_reg1 = apply_safety_lock(df_reg_2pct).sort_values(by='Total_Untung_Slot', ascending=False)
-        res_reg1 = res_reg1.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian'})
-        st.dataframe(res_reg1[['Nama Barang', 'Harga Beli', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
+    if not df_f2p_2pct.empty:
+        df_f2p_2pct['Untung_Per_Biji'] = df_f2p_2pct['Hourly_Low'] - df_f2p_2pct['Live_Low'] - df_f2p_2pct['Tax']
+        res_f2p1 = apply_safety_lock(df_f2p_2pct).sort_values(by='Total_Untung_Slot', ascending=False)
+        res_f2p1 = res_f2p1.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian'})
+        st.dataframe(res_f2p1[['Nama Barang', 'Harga Beli', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
     else:
-        st.warning("⏳ Tidak ada item reguler yang sedang anjlok > 2% saat ini.")
+        st.warning("⏳ Tidak ada item F2P yang sedang anjlok > 2% saat ini.")
 
     st.divider()
 
-    # TABEL 2
-    st.subheader("⚡ Tabel 2: Favorit Reguler (Turun Tipis 0.5% - 2% / Main Cepat)")
-    df_reg_05pct = df_reguler[
-        (df_reguler['Live_Low'] > 0) & 
-        (df_reguler['Hourly_Low'] > (df_reguler['Live_Low'] * 1.005)) & 
-        (df_reguler['Hourly_Low'] <= (df_reguler['Live_Low'] * 1.02)) & 
-        (((df_reguler['Daily_Low'] + df_reguler['Daily_High']) / 2.0) > df_reguler['Live_Low']) & 
-        ((df_reguler['Hourly_Low'] - df_reguler['Live_Low'] - df_reguler['Tax']) > 0)
+    # ==========================================
+    # TABEL 2: SEMUA ITEM F2P (TURUN TIPIS 0.5% - 2%)
+    # ==========================================
+    st.subheader("⚡ Tabel 2: Global F2P — Turun Tipis (0.5% - 2% / Main Cepat)")
+    st.write("Semua barang F2P berliku cepat yang sedang turun tipis — cocok untuk *scalping* kilat:")
+
+    df_f2p_05pct = master_data[
+        (master_data['Live_Low'] > 0) & 
+        (master_data['Hourly_Low'] > (master_data['Live_Low'] * 1.005)) & 
+        (master_data['Hourly_Low'] <= (master_data['Live_Low'] * 1.02)) & 
+        (((master_data['Daily_Low'] + master_data['Daily_High']) / 2.0) > master_data['Live_Low']) & 
+        ((master_data['Hourly_Low'] - master_data['Live_Low'] - master_data['Tax']) > 0)
     ].copy()
 
-    if not df_reg_05pct.empty:
-        df_reg_05pct['Untung_Per_Biji'] = df_reg_05pct['Hourly_Low'] - df_reg_05pct['Live_Low'] - df_reg_05pct['Tax']
-        res_reg2 = apply_safety_lock(df_reg_05pct).sort_values(by='Total_Untung_Slot', ascending=False)
-        res_reg2 = res_reg2.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian'})
-        st.dataframe(res_reg2[['Nama Barang', 'Harga Beli', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
+    if not df_f2p_05pct.empty:
+        df_f2p_05pct['Untung_Per_Biji'] = df_f2p_05pct['Hourly_Low'] - df_f2p_05pct['Live_Low'] - df_f2p_05pct['Tax']
+        res_f2p2 = apply_safety_lock(df_f2p_05pct).sort_values(by='Total_Untung_Slot', ascending=False)
+        res_f2p2 = res_f2p2.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian'})
+        st.dataframe(res_f2p2[['Nama Barang', 'Harga Beli', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
     else:
-        st.info("💡 Tidak ada komoditas laris yang sedang turun tipis (0.5%-2%) saat ini.")
+        st.info("💡 Tidak ada item F2P yang sedang turun tipis (0.5%-2%) saat ini.")
 
     st.divider()
 
-    # TABEL 3
-    st.subheader("💎 Tabel 3: Radar SULTAN & JACKPOT (Item Langka)")
-    df_jackpot = master_data[master_data['mappingname'].isin(JACKPOT_ITEMS)].copy()
-    df_jackpot['Untung_Per_Biji'] = df_jackpot['Hourly_Low'] - df_jackpot['Live_Low'] - df_jackpot['Tax']
-    df_jack_filtered = df_jackpot[
-        (df_jackpot['Live_Low'] > 0) & 
-        (df_jackpot['Untung_Per_Biji'] > 0) &
+    # ==========================================
+    # TABEL 3: RADAR SULTAN & HIGH-MARGIN F2P
+    # ==========================================
+    st.subheader("💎 Tabel 3: Global F2P — Radar SULTAN & High-Margin")
+    st.write("Memindai seluruh item bernilai tinggi di F2P yang memberikan **Untung ≥ 15.000 GP/biji** ATAU **Anjlok Ekstrem (> 3%)**:")
+
+    master_data['Untung_Per_Biji'] = master_data['Hourly_Low'] - master_data['Live_Low'] - master_data['Tax']
+    df_f2p_jackpot = master_data[
+        (master_data['Live_Low'] > 0) & 
+        (master_data['Untung_Per_Biji'] > 0) &
         (
-            (df_jackpot['Untung_Per_Biji'] >= 15000) | 
-            (df_jackpot['Hourly_Low'] > (df_jackpot['Live_Low'] * 1.03))
+            (master_data['Untung_Per_Biji'] >= 15000) | 
+            (master_data['Hourly_Low'] > (master_data['Live_Low'] * 1.03))
         )
     ].copy()
 
-    if not df_jack_filtered.empty:
-        res_jack = apply_safety_lock(df_jack_filtered).sort_values(by='Total_Untung_Slot', ascending=False)
-        res_jack = res_jack.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian'})
-        st.success("🚨 ADA BARANG SULTAN YANG WORTH-IT!")
-        st.dataframe(res_jack[['Nama Barang', 'Harga Beli', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
+    if not df_f2p_jackpot.empty:
+        res_f2p_jack = apply_safety_lock(df_f2p_jackpot).sort_values(by='Total_Untung_Slot', ascending=False)
+        res_f2p_jack = res_f2p_jack.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian'})
+        st.success("🚨 ADA PELUANG SULTAN F2P YANG WORTH-IT!")
+        st.dataframe(res_f2p_jack[['Nama Barang', 'Harga Beli', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
     else:
-        st.info("💡 Sedang tidak ada barang Sultan/Langka yang memberi margin besar saat ini.")
+        st.info("💡 Sedang tidak ada barang Sultan F2P ber-margin besar saat ini.")
 
     st.divider()
 
     # ==========================================
-    # DUAL CHART (5m & 1h SEKALIGUS)
+    # DUAL CHART (SEMUA ITEM F2P)
     # ==========================================
-    st.header("📈 Dual Chart Analisis (Interval 5m & 1h Sekaligus)")
-    st.write("Pilih barang di bawah untuk melihat grafik secara bersamaan.")
+    st.header("📈 Dual Chart Analisis (Semua Item F2P)")
+    st.write("Pilih barang apa saja dari seluruh item F2P OSRS untuk melihat grafik 5m & 1h secara bersamaan.")
 
     daftar_item = master_data.sort_values(by='mappingname')[['id', 'mappingname']].drop_duplicates()
-    pilihan_nama = st.selectbox("Pilih Barang untuk Dilihat Grafiknya:", daftar_item['mappingname'].tolist(), index=0)
+    pilihan_nama = st.selectbox("Pilih Barang F2P:", daftar_item['mappingname'].tolist(), index=0)
     id_terpilih = daftar_item[daftar_item['mappingname'] == pilihan_nama]['id'].values[0]
 
     @st.cache_data(ttl=180)
@@ -289,7 +281,7 @@ if not master_data.empty:
         else:
             st.warning(f"Data historis tidak cukup untuk interval {timestep_label}.")
 
-    # Tampilkan Grafik 5m dan 1h secara Bersamaan
+    # Tampilkan Dual Chart
     render_chart("5 Menit (Scalping / Jangka Pendek)", "5m")
     st.divider()
     render_chart("1 Jam (Macro / Tren Utama)", "1h")
