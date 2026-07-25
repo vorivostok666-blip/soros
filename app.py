@@ -315,10 +315,10 @@ if not master_data.empty:
     # ==========================================
     st.subheader("📸 Alat Otomatis Simpan Screenshot Grafik")
     st.write(f"Klik tombol di bawah untuk menyimpan kedua grafik **{pilihan_nama}** secara otomatis ke folder tujuan Anda:")
-    st.code(r"C:\Users\user1\OneDrive\Desktop\flippinger\ss")
+    st.code(r"C:\flip-ss")
 
     if st.button("💾 Simpan SS Grafik ke Folder Tujuan", type="primary"):
-        target_dir = r"C:\Users\user1\OneDrive\Desktop\flippinger\ss"
+        target_dir = r"C:\flip-ss"
         os.makedirs(target_dir, exist_ok=True)
 
         safe_nama = "".join(c for c in pilihan_nama if c.isalnum() or c in (' ', '_', '-')).strip()
