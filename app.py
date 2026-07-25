@@ -9,7 +9,7 @@ import numpy as np
 st.set_page_config(page_title="OSRS My Favorite Flips", layout="centered")
 
 st.title("⭐ OSRS Personal Flipping Radar")
-st.write("Sinyal *trading* otomatis dengan **3 Radar Terpisah**: Anjlok Tajam (>2%), Turun Tipis (0.5%-2%), & Radar Sultan.")
+st.write("Sinyal *trading* otomatis dengan **3 Radar Terpisah** (Disesuaikan untuk Modal 8 Juta GP).")
 
 # ==========================================
 # 1. DAFTAR 19 ITEM FAVORIT REGULER (VOLUME / HARIAN)
@@ -77,9 +77,9 @@ div[data-testid="stSidebar"] .stButton > button:hover {{
 st.sidebar.header("⚙️ Pengaturan Modal GE")
 total_modal = st.sidebar.number_input(
     "Masukkan Total Modal Anda (GP):", 
-    min_value=10000, 
-    value=3000000,  # Default modal 3m
-    step=100000,
+    min_value=50000, 
+    value=8000000,  # <-- DIPERBARUI: Default modal langsung di 8 Juta (8m)
+    step=500000,    # <-- DIPERBARUI: Kelipatan tombol naik jadi 500k per klik
     format="%d",
     help="Modal ini akan dibagi rata ke 3 slot aktif Grand Exchange."
 )
@@ -182,15 +182,15 @@ if not master_data.empty:
     st.divider()
 
     # ==========================================
-    # TABEL 2 (BARU - DI TENGAH): FAVORIT REGULER (TURUN TIPIS 0.5% - 2%)
+    # TABEL 2: FAVORIT REGULER (TURUN TIPIS 0.5% - 2%)
     # ==========================================
     st.subheader("⚡ Tabel 2: Favorit Reguler (Turun Tipis 0.5% - 2% / Main Cepat)")
-    st.write("Khusus komoditas laris (*Coal, Gold bar, Soft clay,* dll.) yang **turun tipis 0.5% s/d 2%** — cocok untuk perputaran uang kilat:")
+    st.write("Khusus komoditas laris yang **turun tipis 0.5% s/d 2%** — cocok untuk perputaran uang kilat:")
 
     df_reg_05pct = df_reguler[
         (df_reguler['Live_Low'] > 0) & 
         (df_reguler['Hourly_Low'] > (df_reguler['Live_Low'] * 1.005)) & 
-        (df_reguler['Hourly_Low'] <= (df_reguler['Live_Low'] * 1.02)) &  # Antara 0.5% sampai 2%
+        (df_reguler['Hourly_Low'] <= (df_reguler['Live_Low'] * 1.02)) & 
         (((df_reguler['Daily_Low'] + df_reguler['Daily_High']) / 2.0) > df_reguler['Live_Low']) & 
         ((df_reguler['Hourly_Low'] - df_reguler['Live_Low'] - df_reguler['Tax']) > 0)
     ].copy()
@@ -391,10 +391,9 @@ if not master_data.empty:
         st.altair_chart(chart_final, use_container_width=True)
         
         st.markdown("""
-        💡 **Cara Memakai 3 Radar Baru Ini:**
-        * 🔥 **Tabel 1 (Anjlok >2%):** Diskon besar untuk barang komoditas harian Anda.
-        * ⚡ **Tabel 2 (Turun Tipis 0.5%-2%):** Cocok untuk *Coal, Gold bar,* atau *Ores* saat harganya cuma bergejolak tipis. Eksekusi cepat dalam hitungan menit!
-        * 💎 **Tabel 3 (Sultan/Jackpot):** Untuk mengincar profit besar di barang langka seperti *Ham joint* atau *Bryophyta's staff*.
+        💡 **Tips Modal 8 Juta GP:**
+        * 💰 Alokasi modal per slot Anda sekarang sekitar **2,66 Juta GP**. 
+        * 💎 Manfaatkan modal besar ini untuk mulai melirik **Tabel 3 (Radar Sultan)** karena Anda kini mampu memborong item bernilai tinggi tanpa takut kekurangan dana tunai.
         """)
     else:
         st.warning(f"Belum ada data grafik historis yang cukup untuk barang **{pilihan_nama}** pada interval waktu **{rentang_waktu}**.")
