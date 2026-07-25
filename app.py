@@ -9,7 +9,7 @@ import numpy as np
 st.set_page_config(page_title="OSRS F2P Global Flipping Radar", layout="centered")
 
 st.title("⭐ OSRS Global F2P Flipping Radar")
-st.write("Sinyal *trading* otomatis untuk **SEMUA ITEM F2P OSRS** dengan 3 Radar Terpisah & Dual Chart (Modal 8 Juta GP).")
+st.write("Sinyal *trading* otomatis untuk **SEMUA ITEM F2P OSRS** dengan 4 Radar Terpisah & Dual Chart (Modal 8 Juta GP).")
 
 # ==========================================
 # FUNGSI MENGAMBIL SEMUA ITEM F2P DARI API WIKI
@@ -53,6 +53,69 @@ def fetch_market_data():
     except Exception as e:
         st.error(f"Gagal mengambil data API: {e}")
         return pd.DataFrame()
+
+# ==========================================
+# VERIFIKASI SHOCK DIP (metodologi poignanttech.com —
+# "Virtual Markets Part Four: Shocks and Dip Detection")
+#
+# Prinsip: dip "recency" saja (1 jam) tidak cukup, karena bisa jadi cuma
+# pantulan balik dari spike (contoh kasus: Infinity Hat, Antidote++ di
+# artikel aslinya). Untuk memastikan ini shock dip beneran, harga sekarang
+# harus lebih rendah dari titik TERENDAH yang pernah tercatat dalam:
+#   - 14 hari terakhir (granularitas per jam)  -> "biweekly floor"
+#   - 30 hari terakhir (granularitas per hari) -> "monthly floor"
+# Ditambah cek likuiditas (median volume > 0) supaya tidak menjebak
+# barang yang jarang diperdagangkan.
+# ==========================================
+@st.cache_data(ttl=600)
+def fetch_dip_verification(item_id):
+    headers = {'User-Agent': 'Belajar_Data_Analisis_Bot_Lokal'}
+    hasil = {
+        'biweekly_floor': None,
+        'monthly_floor': None,
+        'monthly_median_vol_low': 0,
+        'monthly_median_vol_high': 0,
+        'daily_median_vol_low': 0,
+        'daily_median_vol_high': 0,
+        'ok': False
+    }
+    try:
+        num_cols = ['avgHighPrice', 'avgLowPrice', 'highPriceVolume', 'lowPriceVolume']
+
+        # --- Histori per jam, ambil ~14 hari terakhir (biweekly floor) ---
+        url_1h = f"https://prices.runescape.wiki/api/v1/osrs/timeseries?timestep=1h&id={item_id}"
+        data_1h = requests.get(url_1h, headers=headers, timeout=10).json().get('data', [])
+        if data_1h:
+            df1h = pd.DataFrame(data_1h).tail(14 * 24)
+            for c in num_cols:
+                if c in df1h.columns:
+                    df1h[c] = pd.to_numeric(df1h[c], errors='coerce')
+            min_high = df1h['avgHighPrice'].min(skipna=True) if 'avgHighPrice' in df1h else None
+            min_low = df1h['avgLowPrice'].min(skipna=True) if 'avgLowPrice' in df1h else None
+            if pd.notna(min_high) and pd.notna(min_low):
+                hasil['biweekly_floor'] = (min_high + min_low) / 2.0
+            hasil['daily_median_vol_low'] = float(df1h['lowPriceVolume'].tail(24).median(skipna=True) or 0) if 'lowPriceVolume' in df1h else 0
+            hasil['daily_median_vol_high'] = float(df1h['highPriceVolume'].tail(24).median(skipna=True) or 0) if 'highPriceVolume' in df1h else 0
+
+        # --- Histori per hari, ambil 30 hari terakhir (monthly floor) ---
+        url_24h = f"https://prices.runescape.wiki/api/v1/osrs/timeseries?timestep=24h&id={item_id}"
+        data_24h = requests.get(url_24h, headers=headers, timeout=10).json().get('data', [])
+        if data_24h:
+            df24h = pd.DataFrame(data_24h).tail(30)
+            for c in num_cols:
+                if c in df24h.columns:
+                    df24h[c] = pd.to_numeric(df24h[c], errors='coerce')
+            min_high = df24h['avgHighPrice'].min(skipna=True) if 'avgHighPrice' in df24h else None
+            min_low = df24h['avgLowPrice'].min(skipna=True) if 'avgLowPrice' in df24h else None
+            if pd.notna(min_high) and pd.notna(min_low):
+                hasil['monthly_floor'] = (min_high + min_low) / 2.0
+            hasil['monthly_median_vol_low'] = float(df24h['lowPriceVolume'].median(skipna=True) or 0) if 'lowPriceVolume' in df24h else 0
+            hasil['monthly_median_vol_high'] = float(df24h['highPriceVolume'].median(skipna=True) or 0) if 'highPriceVolume' in df24h else 0
+
+        hasil['ok'] = True
+    except Exception:
+        pass
+    return hasil
 
 # ==========================================
 # LOGIKA WAKTU & WARNA TOMBOL (KUNING / HIJAU)
@@ -106,6 +169,22 @@ total_modal = st.sidebar.number_input(
 modal_per_slot = total_modal / 3
 st.sidebar.info(f"💰 Modal per Slot (3 Slot): **{modal_per_slot:,.0f} GP**")
 
+st.sidebar.header("🔬 Verifikasi Shock Mendalam")
+st.sidebar.caption("Berdasarkan metodologi poignanttech.com — cek dip terhadap harga terendah 14 & 30 hari terakhir, bukan cuma rata-rata 24 jam.")
+aktifkan_verifikasi_dalam = st.sidebar.checkbox(
+    "Aktifkan Verifikasi Historis (14/30 Hari)",
+    value=True,
+    help="Mengecek ulang tiap kandidat dip dari Tabel 1 & 2 terhadap harga terendah historis 14 hari (per jam) & 30 hari (per hari) via API timeseries wiki OSRS. Ini menyaring 'dip palsu' yang sebenarnya cuma pantulan balik dari spike. Menambah waktu pindai karena butuh 2 panggilan API tambahan per item."
+)
+max_kandidat_verifikasi = st.sidebar.number_input(
+    "Maks. Kandidat Diverifikasi", min_value=5, max_value=100, value=25, step=5,
+    help="Batasi jumlah item yang diverifikasi mendalam (diambil dari kandidat dengan potensi untung tertinggi) supaya pindai tidak terlalu lama & tidak membebani API wiki."
+)
+min_profit_total = st.sidebar.number_input(
+    "Min. Profit Total per Slot (GP)", min_value=0, value=5000, step=1000,
+    help="Item dengan potensi untung per slot di bawah angka ini akan disaring dari Tabel 4 (Verified Shock Dips)."
+)
+
 if st.sidebar.button(btn_label):
     fetch_market_data.clear()
     st.session_state['last_update'] = time.time()
@@ -150,9 +229,10 @@ if not master_data.empty:
     if not df_f2p_2pct.empty:
         df_f2p_2pct['Untung_Per_Biji'] = df_f2p_2pct['Hourly_Low'] - df_f2p_2pct['Live_Low'] - df_f2p_2pct['Tax']
         res_f2p1 = apply_safety_lock(df_f2p_2pct).sort_values(by='Total_Untung_Slot', ascending=False)
-        res_f2p1 = res_f2p1.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian'})
-        st.dataframe(res_f2p1[['Nama Barang', 'Harga Beli', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
+        res_f2p1_display = res_f2p1.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian'})
+        st.dataframe(res_f2p1_display[['Nama Barang', 'Harga Beli', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
     else:
+        res_f2p1 = pd.DataFrame()
         st.warning("⏳ Tidak ada item F2P yang sedang anjlok > 2% saat ini.")
 
     st.divider()
@@ -174,9 +254,10 @@ if not master_data.empty:
     if not df_f2p_05pct.empty:
         df_f2p_05pct['Untung_Per_Biji'] = df_f2p_05pct['Hourly_Low'] - df_f2p_05pct['Live_Low'] - df_f2p_05pct['Tax']
         res_f2p2 = apply_safety_lock(df_f2p_05pct).sort_values(by='Total_Untung_Slot', ascending=False)
-        res_f2p2 = res_f2p2.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian'})
-        st.dataframe(res_f2p2[['Nama Barang', 'Harga Beli', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
+        res_f2p2_display = res_f2p2.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian'})
+        st.dataframe(res_f2p2_display[['Nama Barang', 'Harga Beli', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
     else:
+        res_f2p2 = pd.DataFrame()
         st.info("💡 Tidak ada item F2P yang sedang turun tipis (0.5%-2%) saat ini.")
 
     st.divider()
@@ -204,6 +285,77 @@ if not master_data.empty:
         st.dataframe(res_f2p_jack[['Nama Barang', 'Harga Beli', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
     else:
         st.info("💡 Sedang tidak ada barang Sultan F2P ber-margin besar saat ini.")
+
+    st.divider()
+
+    # ==========================================
+    # TABEL 4: VERIFIED SHOCK DIPS (Filter Historis Ketat)
+    # Metodologi: poignanttech.com — "Virtual Markets Part Four:
+    # Shocks and Dip Detection". Kandidat dari Tabel 1 & 2 diverifikasi
+    # ulang terhadap harga TERENDAH historis 14 hari & 30 hari, plus
+    # cek likuiditas, supaya dip "bekas spike" tidak lolos.
+    # ==========================================
+    st.subheader("🛡️ Tabel 4: Verified Shock Dips (Anti-Jebakan Spike)")
+    st.write(
+        "Kandidat dari Tabel 1 & 2 diverifikasi ulang terhadap harga **terendah** historis "
+        "14 hari (per jam) dan 30 hari (per hari). Item hanya lolos kalau harga sekarang "
+        "lebih rendah dari titik terendah historis tersebut — ini menyaring barang yang "
+        "cuma 'kembali normal' setelah spike, bukan shock dip beneran."
+    )
+
+    if aktifkan_verifikasi_dalam:
+        kandidat_shock = pd.concat([res_f2p1, res_f2p2], ignore_index=True)
+
+        if not kandidat_shock.empty:
+            kandidat_shock = kandidat_shock.drop_duplicates(subset='id').sort_values(
+                by='Total_Untung_Slot', ascending=False
+            ).head(int(max_kandidat_verifikasi))
+
+            hasil_verifikasi = []
+            total_kandidat = len(kandidat_shock)
+            progress_bar = st.progress(0, text="Memverifikasi histori harga...")
+
+            for idx, (_, row) in enumerate(kandidat_shock.iterrows()):
+                v = fetch_dip_verification(int(row['id']))
+                progress_bar.progress(
+                    (idx + 1) / total_kandidat,
+                    text=f"Memverifikasi {row['mappingname']} ({idx + 1}/{total_kandidat})..."
+                )
+
+                if not v['ok']:
+                    continue
+
+                lolos_biweekly = (v['biweekly_floor'] is not None) and (row['Live_Low'] < v['biweekly_floor'])
+                lolos_monthly = (v['monthly_floor'] is not None) and (row['Live_Low'] < v['monthly_floor'])
+                lolos_likuiditas = (
+                    v['monthly_median_vol_low'] > 0 and v['monthly_median_vol_high'] > 0 and
+                    v['daily_median_vol_low'] > 0 and v['daily_median_vol_high'] > 0
+                )
+                lolos_profit_min = row['Total_Untung_Slot'] >= min_profit_total
+
+                if lolos_biweekly and lolos_monthly and lolos_likuiditas and lolos_profit_min:
+                    hasil_verifikasi.append(row)
+
+            progress_bar.empty()
+
+            if hasil_verifikasi:
+                df_verified = pd.DataFrame(hasil_verifikasi).sort_values(by='Total_Untung_Slot', ascending=False)
+                df_verified = df_verified.rename(columns={
+                    'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual',
+                    'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung',
+                    'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian'
+                })
+                st.success(f"✅ {len(df_verified)} item lolos verifikasi shock dip historis!")
+                st.dataframe(
+                    df_verified[['Nama Barang', 'Harga Beli', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']],
+                    use_container_width=True
+                )
+            else:
+                st.info("💡 Tidak ada kandidat yang lolos verifikasi historis ketat saat ini. Coba lagi nanti, atau turunkan ambang profit minimum / naikkan jumlah kandidat di sidebar.")
+        else:
+            st.info("💡 Tidak ada kandidat dari Tabel 1 & 2 untuk diverifikasi saat ini.")
+    else:
+        st.info("🔕 Verifikasi shock mendalam sedang dimatikan. Aktifkan di sidebar untuk memfilter dip palsu (bekas spike) menggunakan histori harga 14/30 hari.")
 
     st.divider()
 
