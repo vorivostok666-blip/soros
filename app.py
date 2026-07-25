@@ -9,19 +9,33 @@ import numpy as np
 st.set_page_config(page_title="OSRS My Favorite Flips", layout="centered")
 
 st.title("⭐ OSRS Personal Flipping Radar")
-st.write("Sinyal *trading* otomatis yang **memantau seluruh 22 item favorit pribadi Anda tanpa pengecualian**, diurutkan dari profit terbesar.")
+st.write("Sinyal *trading* otomatis dengan **2 Radar Terpisah**: Favorit Reguler (2% Dip) & Radar Sultan/Jackpot.")
 
 # ==========================================
-# DAFTAR 22 ITEM FAVORIT PRIBADI (DARI RIWAYAT FLIPPING ANDA)
+# 1. DAFTAR 19 ITEM FAVORIT REGULER (VOLUME / HARIAN)
 # ==========================================
-MY_FAVORITE_ITEMS = [
+REGULAR_FAVORITES = [
     "Coal", "Gold bar", "Soft clay", "Emerald", "Gold necklace", 
     "Gold ore", "Chaos rune", "Ruby necklace", "Yew logs", 
-    "Bryophyta's staff (uncharged)", "Limpwurt root", "Adamantite ore", 
-    "Cosmic rune", "Uncut emerald", "Ham joint", "Steel bar", 
-    "Sapphire", "Death rune", "Uncut ruby", "Ruby", 
-    "Big bones", "Black skirt (g)"
+    "Limpwurt root", "Adamantite ore", "Cosmic rune", "Uncut emerald", 
+    "Steel bar", "Sapphire", "Death rune", "Uncut ruby", "Ruby", "Big bones"
 ]
+
+# ==========================================
+# 2. DAFTAR ITEM SULTAN / JACKPOT (LANGKA & MARGIN RAKSASA)
+# ==========================================
+JACKPOT_ITEMS = [
+    # 3 Barang Sultan dari riwayat flipping Anda:
+    "Bryophyta's staff (uncharged)", "Ham joint", "Black skirt (g)",
+    # Bonus tambahan item Sultan F2P yang mirip & sangat worth-it:
+    "Hill giant club", "Rune 2h sword", "Rune platebody (g)", 
+    "Rune platebody (t)", "Zamorak platebody", "Saradomin platebody", 
+    "Guthix platebody", "Rune full helm (g)", "Rune kiteshield (g)",
+    "Gilded platebody", "Gilded full helm"
+]
+
+# Gabungan semua item untuk keperluan pemindaian API
+ALL_MONITORED_ITEMS = REGULAR_FAVORITES + JACKPOT_ITEMS
 
 # ==========================================
 # LOGIKA WAKTU & WARNA TOMBOL (KUNING / HIJAU)
@@ -102,8 +116,8 @@ def fetch_market_data():
 
         master = df_1h.merge(df_24h, on='id').merge(df_latest, on='id').merge(df_map, on='id', how='inner')
         
-        # --- FILTER KHUSUS: HANYA AMBIL ITEM DARI DAFTAR FAVORIT ANDA ---
-        master = master[master['mappingname'].isin(MY_FAVORITE_ITEMS)].copy()
+        # Filter hanya mengambil item dari gabungan daftar Anda
+        master = master[master['mappingname'].isin(ALL_MONITORED_ITEMS)].copy()
         
         for col in ['Hourly_Low', 'Live_Low', 'Daily_Low', 'Daily_High', 'D_VolLow', 'H_VolLow', 'mappinglimit']:
             if col in master.columns:
@@ -122,79 +136,80 @@ if st.sidebar.button(btn_label):
     st.rerun()
 
 # Ambil data pasar utama
-with st.spinner('Memindai harga live dari 22 barang favorit Anda...'):
+with st.spinner('Memindai pasar untuk daftar reguler dan barang sultan Anda...'):
     master_data = fetch_market_data()
 
 if not master_data.empty:
     
-    # ==========================================
-    # TAMPILAN 1 TABEL TUNGGAL: SEMUA BARANG FAVORIT DIURUTKAN
-    # ==========================================
-    st.subheader("🔥 Radar Peluang: Seluruh Daftar Favoritku")
-    st.write("Menampilkan **semua barang dari daftar Anda tanpa ada yang disembunyikan**, diurutkan dari potensi profit slot terbesar:")
-
-    def process_favorite_signals(df):
-        # Filter dip dan volume DICOPOT TOTAL agar semua 22 barang selalu muncul
-        filtered = df[
-            (df['Live_Low'] > 0) & 
-            (df['Hourly_Low'] > 0)
-        ].copy()
-
-        if filtered.empty:
-            return pd.DataFrame()
-
-        filtered['Untung_Per_Biji'] = filtered['Hourly_Low'] - filtered['Live_Low'] - filtered['Tax']
-        
-        # 3-Way Safety Lock (Modal vs GE Limit vs 3% Vol Harian)
+    # Fungsi 3-Way Safety Lock
+    def apply_safety_lock(df):
         def safe_calc_qty(row):
             price = row['Live_Low']
             limit = row['mappinglimit']
             vol_harian = row['D_VolLow']
-            untung = row['Untung_Per_Biji']
-            
-            # Jika harga tidak valid atau saat ini sedang rugi/0 profit, sarankan beli 0
-            if price <= 0 or untung <= 0:
-                return 0
-            
+            if price <= 0: return 0
             max_afford = modal_per_slot / price
             max_vol_market = max(1.0, vol_harian * 0.03)
-            
             valid_limits = [max_afford, max_vol_market]
-            if limit > 0:
-                valid_limits.append(limit)
-                
-            qty_aman = min(valid_limits)
-            return int(max(qty_aman, 0))
+            if limit > 0: valid_limits.append(limit)
+            return int(max(min(valid_limits), 0))
+            
+        df['Beli_Berapa_Biji'] = df.apply(safe_calc_qty, axis=1)
+        df = df[df['Beli_Berapa_Biji'] > 0].copy()
+        df['Total_Untung_Slot'] = df['Untung_Per_Biji'] * df['Beli_Berapa_Biji']
+        df['ROI_Persen'] = (df['Untung_Per_Biji'] / df['Live_Low']) * 100
+        return df
 
-        filtered['Beli_Berapa_Biji'] = filtered.apply(safe_calc_qty, axis=1)
-        filtered['Total_Untung_Slot'] = filtered['Untung_Per_Biji'] * filtered['Beli_Berapa_Biji']
-        
-        # Hitung ROI (%) dengan aman
-        filtered['ROI_Persen'] = filtered.apply(
-            lambda r: (r['Untung_Per_Biji'] / r['Live_Low']) * 100 if r['Live_Low'] > 0 else 0, axis=1
-        )
-        
-        # Urutkan mutlak dari total untung per slot terbesar ke terkecil
-        result = filtered.sort_values(by='Total_Untung_Slot', ascending=False)
-        
-        result = result.rename(columns={
-            'mappingname': 'Nama Barang',
-            'Live_Low': 'Harga Beli',
-            'Hourly_Low': 'Harga Jual',
-            'Beli_Berapa_Biji': 'Jml Beli',
-            'Total_Untung_Slot': 'Pr. Untung',
-            'ROI_Persen': 'ROI (%)',
-            'D_VolLow': 'Vol Harian'
-        })
-        
-        return result[['Nama Barang', 'Harga Beli', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']]
+    # ==========================================
+    # TABEL 1: RADAR FAVORIT REGULER (ANJLOK > 2%)
+    # ==========================================
+    st.subheader("🔥 Tabel 1: Favorit Reguler (Anjlok Tajam > 2%)")
+    st.write("Memantau komoditas volume harian Anda. Hanya muncul jika **anjlok $\ge 2\%$** dan terbukti cuan (anti-rugi):")
 
-    df_favorit = process_favorite_signals(master_data)
-    
-    if not df_favorit.empty:
-        st.dataframe(df_favorit, use_container_width=True)
+    df_reguler = master_data[master_data['mappingname'].isin(REGULAR_FAVORITES)].copy()
+    df_reg_filtered = df_reguler[
+        (df_reguler['Live_Low'] > 0) & 
+        (df_reguler['Hourly_Low'] > (df_reguler['Live_Low'] * 1.02)) & 
+        (((df_reguler['Daily_Low'] + df_reguler['Daily_High']) / 2.0) > df_reguler['Live_Low']) & 
+        ((df_reguler['Hourly_Low'] - df_reguler['Live_Low'] - df_reguler['Tax']) > 0)
+    ].copy()
+
+    if not df_reg_filtered.empty:
+        df_reg_filtered['Untung_Per_Biji'] = df_reg_filtered['Hourly_Low'] - df_reg_filtered['Live_Low'] - df_reg_filtered['Tax']
+        res_reg = apply_safety_lock(df_reg_filtered).sort_values(by='Total_Untung_Slot', ascending=False)
+        res_reg = res_reg.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian'})
+        st.dataframe(res_reg[['Nama Barang', 'Harga Beli', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
     else:
-        st.info("💡 Data pasar sedang diproses oleh API Wiki.")
+        st.warning("⏳ Tidak ada item reguler yang sedang anjlok > 2% saat ini.")
+
+    st.divider()
+
+    # ==========================================
+    # TABEL 2: RADAR SULTAN & JACKPOT (LANGKA / HIGH-MARGIN)
+    # ==========================================
+    st.subheader("💎 Tabel 2: Radar SULTAN & JACKPOT (Item Langka)")
+    st.write("Memantau *Ham joint, Bryophyta staff,* dll. Muncul jika ada **Untung > 15.000 GP/biji** ATAU sedang **Anjlok Ekstrem (> 3%)**:")
+
+    df_jackpot = master_data[master_data['mappingname'].isin(JACKPOT_ITEMS)].copy()
+    df_jackpot['Untung_Per_Biji'] = df_jackpot['Hourly_Low'] - df_jackpot['Live_Low'] - df_jackpot['Tax']
+    
+    # Logika khusus Sultan: Untung bersih di atas 15k ATAU anjlok > 3%
+    df_jack_filtered = df_jackpot[
+        (df_jackpot['Live_Low'] > 0) & 
+        (df_jackpot['Untung_Per_Biji'] > 0) &
+        (
+            (df_jackpot['Untung_Per_Biji'] >= 15000) | 
+            (df_jackpot['Hourly_Low'] > (df_jackpot['Live_Low'] * 1.03))
+        )
+    ].copy()
+
+    if not df_jack_filtered.empty:
+        res_jack = apply_safety_lock(df_jack_filtered).sort_values(by='Total_Untung_Slot', ascending=False)
+        res_jack = res_jack.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian'})
+        st.success("🚨 ADA BARANG SULTAN YANG WORTH-IT! Segera cek grafiknya di bawah sebelum eksekusi!")
+        st.dataframe(res_jack[['Nama Barang', 'Harga Beli', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
+    else:
+        st.info("💡 Sedang tidak ada barang Sultan/Langka yang memberi margin besar saat ini. Jangan paksakan masuk.")
 
     st.divider()
 
@@ -202,13 +217,13 @@ if not master_data.empty:
     # FITUR GRAFIK: BACKTESTING AKURASI PROYEKSI VS REALITA (WIB)
     # ==========================================
     st.header("📈 Analisis Grafik & Proyeksi (Waktu WIB)")
-    st.write("Pilih barang dari daftar pribadi Anda untuk melihat riwayat harga, titik masuk/keluar, dan uji akurasi tren.")
+    st.write("Pilih barang dari daftar Anda untuk melihat riwayat harga, titik masuk/keluar, dan uji akurasi tren.")
 
     daftar_item = master_data.sort_values(by='mappingname')[['id', 'mappingname']].drop_duplicates()
     
     col1, col2 = st.columns([3, 1])
     with col1:
-        pilihan_nama = st.selectbox("Pilih Barang Favorit Anda:", daftar_item['mappingname'].tolist(), index=0)
+        pilihan_nama = st.selectbox("Pilih Barang (Reguler & Sultan):", daftar_item['mappingname'].tolist(), index=0)
     with col2:
         rentang_waktu = st.selectbox("Interval:", ["5m", "1h", "6h", "24h"], index=1, help="5m=5 menit, 1h=1 jam")
 
@@ -356,9 +371,9 @@ if not master_data.empty:
         st.altair_chart(chart_final, use_container_width=True)
         
         st.markdown("""
-        💡 **Cara Membaca Radar Favorit Baru:**
-        * 🔥 **Semua Muncul Diurutan:** Barang dengan potensi untung tertinggi saat ini akan berada di baris nomor 1, terus ke bawah sampai barang yang saat ini sedang tidak berpotensi untung (profit 0 / minus).
-        * 🛡️ **Jml Beli Tetap Cerdas:** Jika ada barang yang saat ini margin jual-belinya sedang minus atau sama dengan 0, kolom **Jml Beli** otomatis akan menampilkan angka **0** untuk mencegah Anda rugi.
+        💡 **Cara Memakai 2 Radar Baru Ini:**
+        * 🔥 **Tabel 1 (Reguler):** Gunakan ini untuk main cepat harian (*scalping*). Kalau *Coal* atau *Chaos rune* muncul di sini, borong sesuai rekomendasi jumlah beli dan jual lagi dalam 15-30 menit.
+        * 💎 **Tabel 2 (Sultan/Jackpot):** Jika ada barang muncul di sini (misal *Bryophyta's staff* atau *Hill giant club*), artinya ada selisih untung besar atau ada yang baru saja *panic sell*. Cek grafiknya di bawah untuk melihat apakah garis biru sedang menukik tajam ke bawah sebelum Anda pasang antrean!
         """)
     else:
         st.warning(f"Belum ada data grafik historis yang cukup untuk barang **{pilihan_nama}** pada interval waktu **{rentang_waktu}**.")
