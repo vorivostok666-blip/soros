@@ -4,13 +4,13 @@ import requests
 import time
 import altair as alt
 import numpy as np
-import google.generativeai as genai
+import os
 
 # Konfigurasi Tampilan Halaman Web (Responsif untuk HP)
-st.set_page_config(page_title="OSRS My Favorite Flips", layout="centered")
+st.set_page_config(page_title="OSRS Personal Flipping Radar", layout="centered")
 
 st.title("⭐ OSRS Personal Flipping Radar")
-st.write("Sinyal *trading* otomatis dengan **3 Radar Terpisah** & **Asisten AI Gemini** (Modal 8 Juta GP).")
+st.write("Sinyal *trading* otomatis dengan **3 Radar Terpisah** & **Auto-Save Screenshot Grafik** (Modal 8 Juta GP).")
 
 # ==========================================
 # 1. DAFTAR 19 ITEM FAVORIT REGULER (VOLUME / HARIAN)
@@ -216,16 +216,14 @@ if not master_data.empty:
 
     st.divider()
 
-    # GRAFIK & ANALISIS
-    st.header("📈 Analisis Grafik & Proyeksi (Waktu WIB)")
-    daftar_item = master_data.sort_values(by='mappingname')[['id', 'mappingname']].drop_duplicates()
-    
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        pilihan_nama = st.selectbox("Pilih Barang (Reguler & Sultan):", daftar_item['mappingname'].tolist(), index=0)
-    with col2:
-        rentang_waktu = st.selectbox("Interval:", ["5m", "1h", "6h", "24h"], index=1)
+    # ==========================================
+    # DUAL CHART & AUTO-SAVE SCREENSHOT
+    # ==========================================
+    st.header("📈 Dual Chart Analisis (Interval 5m & 1h Sekaligus)")
+    st.write("Pilih barang di bawah untuk melihat grafik secara bersamaan.")
 
+    daftar_item = master_data.sort_values(by='mappingname')[['id', 'mappingname']].drop_duplicates()
+    pilihan_nama = st.selectbox("Pilih Barang untuk Dilihat Grafiknya:", daftar_item['mappingname'].tolist(), index=0)
     id_terpilih = daftar_item[daftar_item['mappingname'] == pilihan_nama]['id'].values[0]
 
     @st.cache_data(ttl=180)
@@ -244,118 +242,105 @@ if not master_data.empty:
             pass
         return pd.DataFrame()
 
-    with st.spinner(f"Menghitung komparasi realita vs ramalan untuk {pilihan_nama}..."):
-        df_chart = fetch_chart_data(id_terpilih, rentang_waktu)
+    def create_chart(timestep_label, timestep_code):
+        df_c = fetch_chart_data(id_terpilih, timestep_code)
+        if not df_c.empty and len(df_c) > 10:
+            df_c = df_c.sort_values('Waktu').reset_index(drop=True)
+            df_c['MA_Low'] = df_c['avgLowPrice'].rolling(window=6, min_periods=1).mean()
+            df_c['MA_High'] = df_c['avgHighPrice'].rolling(window=6, min_periods=1).mean()
+            df_c['Saran_Beli'] = df_c.apply(lambda r: r['avgLowPrice'] if r['avgLowPrice'] < (r['MA_Low'] / 1.02) else None, axis=1)
+            df_c['Saran_Jual'] = df_c.apply(lambda r: r['avgHighPrice'] if r['avgHighPrice'] > (r['MA_High'] * 1.015) else None, axis=1)
 
-    if not df_chart.empty and len(df_chart) > 15:
-        df_chart = df_chart.sort_values('Waktu').reset_index(drop=True)
+            test_steps = min(6, int(len(df_c) * 0.2))
+            train_end = len(df_c) - test_steps
+            train_d = df_c.iloc[max(0, train_end-15):train_end].copy()
+            test_d = df_c.iloc[train_end:].copy()
+            
+            df_eval = pd.DataFrame(columns=['Waktu', 'Proyeksi_Beli', 'Proyeksi_Jual'])
+            acc_l, acc_h = 0.0, 0.0
+            if len(train_d) > 2:
+                x_tr = np.arange(len(train_d))
+                p_l = np.polyfit(x_tr, train_d['avgLowPrice'], 1)
+                p_h = np.polyfit(x_tr, train_d['avgHighPrice'], 1)
+                x_te = np.arange(len(train_d) - 1, len(train_d) + test_steps)
+                dates_c = [train_d['Waktu'].iloc[-1]] + test_d['Waktu'].tolist()
+                pr_l = np.polyval(p_l, x_te)
+                pr_h = np.polyval(p_h, x_te)
+                df_eval = pd.DataFrame({'Waktu': dates_c, 'Proyeksi_Beli': pr_l, 'Proyeksi_Jual': pr_h})
+                
+                err_l = np.mean(np.abs((test_d['avgLowPrice'].values - pr_l[1:]) / test_d['avgLowPrice'].values)) * 100
+                err_h = np.mean(np.abs((test_d['avgHighPrice'].values - pr_h[1:]) / test_d['avgHighPrice'].values)) * 100
+                acc_l = max(0.0, 100.0 - err_l)
+                acc_h = max(0.0, 100.0 - err_h)
 
-        df_chart['MA_Low'] = df_chart['avgLowPrice'].rolling(window=6, min_periods=1).mean()
-        df_chart['MA_High'] = df_chart['avgHighPrice'].rolling(window=6, min_periods=1).mean()
-        
-        df_chart['Saran_Beli'] = df_chart.apply(
-            lambda row: row['avgLowPrice'] if row['avgLowPrice'] < (row['MA_Low'] / 1.02) else None, axis=1
-        )
-        df_chart['Saran_Jual'] = df_chart.apply(
-            lambda row: row['avgHighPrice'] if row['avgHighPrice'] > (row['MA_High'] * 1.015) else None, axis=1
-        )
+            l_low = alt.Chart(df_c).mark_line(color='#00a8ff', strokeWidth=2).encode(x=alt.X('Waktu:T', title='Waktu (WIB)'), y=alt.Y('avgLowPrice:Q', title='Harga (GP)', scale=alt.Scale(zero=False)))
+            l_high = alt.Chart(df_c).mark_line(color='#e84118', strokeWidth=2).encode(x='Waktu:T', y='avgHighPrice:Q')
+            l_f_low = alt.Chart(df_eval).mark_line(color='#00d2d3', strokeDash=[4, 4], strokeWidth=3).encode(x='Waktu:T', y='Proyeksi_Beli:Q')
+            l_f_high = alt.Chart(df_eval).mark_line(color='#ff9f43', strokeDash=[4, 4], strokeWidth=3).encode(x='Waktu:T', y='Proyeksi_Jual:Q')
+            pt_buy = alt.Chart(df_c.dropna(subset=['Saran_Beli'])).mark_point(shape='triangle-up', size=160, color='#00e676', filled=True).encode(x='Waktu:T', y='Saran_Beli:Q')
+            pt_sell = alt.Chart(df_c.dropna(subset=['Saran_Jual'])).mark_point(shape='triangle-down', size=160, color='#ff1744', filled=True).encode(x='Waktu:T', y='Saran_Jual:Q')
 
-        test_steps = min(6, int(len(df_chart) * 0.2))
-        train_end_idx = len(df_chart) - test_steps
-        
-        train_data = df_chart.iloc[max(0, train_end_idx-15):train_end_idx].copy()
-        test_data = df_chart.iloc[train_end_idx:].copy()
-        
-        x_train = np.arange(len(train_data))
-        poly_low = np.polyfit(x_train, train_data['avgLowPrice'], 1)
-        poly_high = np.polyfit(x_train, train_data['avgHighPrice'], 1)
-        
-        x_test = np.arange(len(train_data) - 1, len(train_data) + test_steps)
-        dates_connected = [train_data['Waktu'].iloc[-1]] + test_data['Waktu'].tolist()
-        pred_low = np.polyval(poly_low, x_test)
-        pred_high = np.polyval(poly_high, x_test)
-        
-        df_proj_eval = pd.DataFrame({
-            'Waktu': dates_connected,
-            'Proyeksi_Beli': pred_low,
-            'Proyeksi_Jual': pred_high
-        })
+            final_chart = alt.layer(l_low, l_high, l_f_low, l_f_high, pt_buy, pt_sell).interactive()
+            return final_chart, acc_l, acc_h
+        return None, 0, 0
 
-        actual_low = test_data['avgLowPrice'].values
-        actual_high = test_data['avgHighPrice'].values
-        eval_pred_low = pred_low[1:]
-        eval_pred_high = pred_high[1:]
-        
-        error_low_pct = np.mean(np.abs((actual_low - eval_pred_low) / actual_low)) * 100
-        error_high_pct = np.mean(np.abs((actual_high - eval_pred_high) / actual_high)) * 100
-        
-        akurasi_beli = max(0.0, 100.0 - error_low_pct)
-        akurasi_jual = max(0.0, 100.0 - error_high_pct)
-
-        col_acc1, col_acc2 = st.columns(2)
-        with col_acc1:
-            st.metric(label="🎯 Akurasi Proyeksi Beli", value=f"{akurasi_beli:.1f}%")
-        with col_acc2:
-            st.metric(label="🎯 Akurasi Proyeksi Jual", value=f"{akurasi_jual:.1f}%")
-
-        line_low = alt.Chart(df_chart).mark_line(color='#00a8ff', strokeWidth=2).encode(
-            x=alt.X('Waktu:T', title='Waktu (WIB)'),
-            y=alt.Y('avgLowPrice:Q', title='Harga (GP)', scale=alt.Scale(zero=False)),
-            tooltip=[
-                alt.Tooltip('Waktu:T', title='Waktu (WIB)', format='%H:%M'),
-                alt.Tooltip('avgLowPrice:Q', title='Realita Harga Beli', format=',.0f'),
-                alt.Tooltip('avgHighPrice:Q', title='Realita Harga Jual', format=',.0f')
-            ]
-        )
-        line_high = alt.Chart(df_chart).mark_line(color='#e84118', strokeWidth=2).encode(x='Waktu:T', y='avgHighPrice:Q')
-        line_future_low = alt.Chart(df_proj_eval).mark_line(color='#00d2d3', strokeDash=[4, 4], strokeWidth=3).encode(x='Waktu:T', y='Proyeksi_Beli:Q')
-        line_future_high = alt.Chart(df_proj_eval).mark_line(color='#ff9f43', strokeDash=[4, 4], strokeWidth=3).encode(x='Waktu:T', y='Proyeksi_Jual:Q')
-
-        points_buy = alt.Chart(df_chart.dropna(subset=['Saran_Beli'])).mark_point(shape='triangle-up', size=180, color='#00e676', filled=True).encode(x='Waktu:T', y='Saran_Beli:Q')
-        points_sell = alt.Chart(df_chart.dropna(subset=['Saran_Jual'])).mark_point(shape='triangle-down', size=180, color='#ff1744', filled=True).encode(x='Waktu:T', y='Saran_Jual:Q')
-
-        chart_final = alt.layer(line_low, line_high, line_future_low, line_future_high, points_buy, points_sell).interactive()
-        st.altair_chart(chart_final, use_container_width=True)
+    # Render Grafik 5m
+    st.subheader("⏱️ Interval: 5 Menit (Scalping / Jangka Pendek)")
+    chart_5m, acc_5l, acc_5h = create_chart("5m", "5m")
+    if chart_5m:
+        c1, c2 = st.columns(2)
+        c1.metric("🎯 Akurasi Beli (5m)", f"{acc_5l:.1f}%")
+        c2.metric("🎯 Akurasi Jual (5m)", f"{acc_5h:.1f}%")
+        st.altair_chart(chart_5m, use_container_width=True)
     else:
-        st.warning(f"Belum ada data grafik historis yang cukup untuk barang **{pilihan_nama}**.")
+        st.warning("Data historis tidak cukup untuk interval 5m.")
 
-    # ==========================================
-    # FITUR ASISTEN AI GEMINI (TERINTEGRASI)
-    # ==========================================
     st.divider()
-    st.header("🤖 Tanya AI Flipper (Asisten Pribadi)")
-    st.write("Butuh analisis cepat tanpa screenshot? Masukkan API Key Anda di bawah dan tanyakan langsung ke AI!")
 
-    gemini_key = st.text_input("Masukkan Gemini API Key Anda:", type="password")
-
-    if gemini_key:
-        genai.configure(api_key=gemini_key)
-        ai_model = genai.GenerativeModel("gemini-1.5-flash")
-
-        pertanyaan_user = st.text_input(
-            "Tulis pertanyaan atau analisis untuk item ini:",
-            value=f"Bagaimana analisis untuk item {pilihan_nama} pada interval {rentang_waktu} saat ini?"
-        )
-
-        if st.button("🚀 Minta Analisis AI"):
-            if pertanyaan_user:
-                with st.spinner("AI sedang membaca data pasar..."):
-                    prompt_lengkap = f"""
-                    Kamu adalah seorang ahli OSRS F2P flipping dengan modal 8 Juta GP. 
-                    Pengguna sedang melihat item: {pilihan_nama} pada interval waktu {rentang_waktu}.
-                    Pertanyaan pengguna: {pertanyaan_user}
-                    Berikan saran trading yang tajam, ringkas, dan to the point (apakah layak dibeli, estimasi harga aman, dan manajemen risikonya). Gunakan bahasa Indonesia santai.
-                    """
-                    try:
-                        response = ai_model.generate_content(prompt_lengkap)
-                        st.success("✨ Hasil Analisis AI:")
-                        st.write(response.text)
-                    except Exception as e:
-                        st.error(f"Gagal menghubungi Gemini API: {e}")
-            else:
-                st.warning("Silakan tulis pertanyaannya terlebih dahulu.")
+    # Render Grafik 1h
+    st.subheader("⏱️ Interval: 1 Jam (Macro / Tren Utama)")
+    chart_1h, acc_1l, acc_1h_val = create_chart("1h", "1h")
+    if chart_1h:
+        c1, c2 = st.columns(2)
+        c1.metric("🎯 Akurasi Beli (1h)", f"{acc_1l:.1f}%")
+        c2.metric("🎯 Akurasi Jual (1h)", f"{acc_1h_val:.1f}%")
+        st.altair_chart(chart_1h, use_container_width=True)
     else:
-        st.info("🔑 Masukkan Gemini API Key Anda di atas untuk mengaktifkan asisten AI pintar.")
+        st.warning("Data historis tidak cukup untuk interval 1h.")
+
+    st.divider()
+
+    # ==========================================
+    # TOMBOL OTOMATIS SIMPAN SCREENSHOT KE FOLDER
+    # ==========================================
+    st.subheader("📸 Alat Otomatis Simpan Screenshot Grafik")
+    st.write(f"Klik tombol di bawah untuk menyimpan kedua grafik **{pilihan_nama}** secara otomatis ke folder tujuan Anda:")
+    st.code(r"C:\Users\user1\OneDrive\Desktop\flippinger\ss")
+
+    if st.button("💾 Simpan SS Grafik ke Folder Tujuan", type="primary"):
+        target_dir = r"C:\Users\user1\OneDrive\Desktop\flippinger\ss"
+        os.makedirs(target_dir, exist_ok=True)
+
+        safe_nama = "".join(c for c in pilihan_nama if c.isalnum() or c in (' ', '_', '-')).strip()
+        path_5m = os.path.join(target_dir, f"{safe_nama}_5m.png")
+        path_1h = os.path.join(target_dir, f"{safe_nama}_1h.png")
+
+        try:
+            saved_count = 0
+            if chart_5m:
+                chart_5m.save(path_5m)
+                saved_count += 1
+            if chart_1h:
+                chart_1h.save(path_1h)
+                saved_count += 1
+
+            if saved_count > 0:
+                st.success(f"✅ Berhasil! {saved_count} file gambar grafik tersimpan otomatis di:\n`{target_dir}`")
+                st.info("Sekarang Anda tinggal membuka folder tersebut, lalu upload gambarnya ke sini untuk kita bahas!")
+            else:
+                st.warning("Tidak ada grafik yang aktif untuk disimpan.")
+        except Exception as e:
+            st.error(f"Gagal menyimpan otomatis. Pastikan Anda sudah menjalankan `pip install vl-convert-python` di terminal Anda. Detail error: {e}")
 
     st.divider()
     st.info(f"💡 Info: Perhitungan menggunakan total modal **{total_modal:,} GP** yang dibagi ke 3 slot GE (**{modal_per_slot:,.0f} GP per slot**).")
