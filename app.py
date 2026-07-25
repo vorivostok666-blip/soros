@@ -4,13 +4,12 @@ import requests
 import time
 import altair as alt
 import numpy as np
-import os
 
 # Konfigurasi Tampilan Halaman Web (Responsif untuk HP)
 st.set_page_config(page_title="OSRS Personal Flipping Radar", layout="centered")
 
 st.title("⭐ OSRS Personal Flipping Radar")
-st.write("Sinyal *trading* otomatis dengan **3 Radar Terpisah** & **Auto-Save Screenshot Grafik** (Modal 8 Juta GP).")
+st.write("Sinyal *trading* otomatis dengan **3 Radar Terpisah** & **Dual Chart (5m & 1h Sekaligus)** (Modal 8 Juta GP).")
 
 # ==========================================
 # 1. DAFTAR 19 ITEM FAVORIT REGULER (VOLUME / HARIAN)
@@ -217,7 +216,7 @@ if not master_data.empty:
     st.divider()
 
     # ==========================================
-    # DUAL CHART & AUTO-SAVE SCREENSHOT
+    # DUAL CHART (5m & 1h SEKALIGUS)
     # ==========================================
     st.header("📈 Dual Chart Analisis (Interval 5m & 1h Sekaligus)")
     st.write("Pilih barang di bawah untuk melihat grafik secara bersamaan.")
@@ -242,7 +241,8 @@ if not master_data.empty:
             pass
         return pd.DataFrame()
 
-    def create_chart(timestep_label, timestep_code):
+    def render_chart(timestep_label, timestep_code):
+        st.subheader(f"⏱️ Interval: {timestep_label}")
         df_c = fetch_chart_data(id_terpilih, timestep_code)
         if not df_c.empty and len(df_c) > 10:
             df_c = df_c.sort_values('Waktu').reset_index(drop=True)
@@ -273,6 +273,10 @@ if not master_data.empty:
                 acc_l = max(0.0, 100.0 - err_l)
                 acc_h = max(0.0, 100.0 - err_h)
 
+                c1, c2 = st.columns(2)
+                c1.metric(f"🎯 Akurasi Beli ({timestep_label})", f"{acc_l:.1f}%")
+                c2.metric(f"🎯 Akurasi Jual ({timestep_label})", f"{acc_h:.1f}%")
+
             l_low = alt.Chart(df_c).mark_line(color='#00a8ff', strokeWidth=2).encode(x=alt.X('Waktu:T', title='Waktu (WIB)'), y=alt.Y('avgLowPrice:Q', title='Harga (GP)', scale=alt.Scale(zero=False)))
             l_high = alt.Chart(df_c).mark_line(color='#e84118', strokeWidth=2).encode(x='Waktu:T', y='avgHighPrice:Q')
             l_f_low = alt.Chart(df_eval).mark_line(color='#00d2d3', strokeDash=[4, 4], strokeWidth=3).encode(x='Waktu:T', y='Proyeksi_Beli:Q')
@@ -281,66 +285,14 @@ if not master_data.empty:
             pt_sell = alt.Chart(df_c.dropna(subset=['Saran_Jual'])).mark_point(shape='triangle-down', size=160, color='#ff1744', filled=True).encode(x='Waktu:T', y='Saran_Jual:Q')
 
             final_chart = alt.layer(l_low, l_high, l_f_low, l_f_high, pt_buy, pt_sell).interactive()
-            return final_chart, acc_l, acc_h
-        return None, 0, 0
+            st.altair_chart(final_chart, use_container_width=True)
+        else:
+            st.warning(f"Data historis tidak cukup untuk interval {timestep_label}.")
 
-    # Render Grafik 5m
-    st.subheader("⏱️ Interval: 5 Menit (Scalping / Jangka Pendek)")
-    chart_5m, acc_5l, acc_5h = create_chart("5m", "5m")
-    if chart_5m:
-        c1, c2 = st.columns(2)
-        c1.metric("🎯 Akurasi Beli (5m)", f"{acc_5l:.1f}%")
-        c2.metric("🎯 Akurasi Jual (5m)", f"{acc_5h:.1f}%")
-        st.altair_chart(chart_5m, use_container_width=True)
-    else:
-        st.warning("Data historis tidak cukup untuk interval 5m.")
-
+    # Tampilkan Grafik 5m dan 1h secara Bersamaan
+    render_chart("5 Menit (Scalping / Jangka Pendek)", "5m")
     st.divider()
-
-    # Render Grafik 1h
-    st.subheader("⏱️ Interval: 1 Jam (Macro / Tren Utama)")
-    chart_1h, acc_1l, acc_1h_val = create_chart("1h", "1h")
-    if chart_1h:
-        c1, c2 = st.columns(2)
-        c1.metric("🎯 Akurasi Beli (1h)", f"{acc_1l:.1f}%")
-        c2.metric("🎯 Akurasi Jual (1h)", f"{acc_1h_val:.1f}%")
-        st.altair_chart(chart_1h, use_container_width=True)
-    else:
-        st.warning("Data historis tidak cukup untuk interval 1h.")
-
-    st.divider()
-
-    # ==========================================
-    # TOMBOL OTOMATIS SIMPAN SCREENSHOT KE FOLDER
-    # ==========================================
-    st.subheader("📸 Alat Otomatis Simpan Screenshot Grafik")
-    st.write(f"Klik tombol di bawah untuk menyimpan kedua grafik **{pilihan_nama}** secara otomatis ke folder tujuan Anda:")
-    st.code(r"C:\flip-ss")
-
-    if st.button("💾 Simpan SS Grafik ke Folder Tujuan", type="primary"):
-        target_dir = r"C:\flip-ss"
-        os.makedirs(target_dir, exist_ok=True)
-
-        safe_nama = "".join(c for c in pilihan_nama if c.isalnum() or c in (' ', '_', '-')).strip()
-        path_5m = os.path.join(target_dir, f"{safe_nama}_5m.png")
-        path_1h = os.path.join(target_dir, f"{safe_nama}_1h.png")
-
-        try:
-            saved_count = 0
-            if chart_5m:
-                chart_5m.save(path_5m)
-                saved_count += 1
-            if chart_1h:
-                chart_1h.save(path_1h)
-                saved_count += 1
-
-            if saved_count > 0:
-                st.success(f"✅ Berhasil! {saved_count} file gambar grafik tersimpan otomatis di:\n`{target_dir}`")
-                st.info("Sekarang Anda tinggal membuka folder tersebut, lalu upload gambarnya ke sini untuk kita bahas!")
-            else:
-                st.warning("Tidak ada grafik yang aktif untuk disimpan.")
-        except Exception as e:
-            st.error(f"Gagal menyimpan otomatis. Pastikan Anda sudah menjalankan `pip install vl-convert-python` di terminal Anda. Detail error: {e}")
+    render_chart("1 Jam (Macro / Tren Utama)", "1h")
 
     st.divider()
     st.info(f"💡 Info: Perhitungan menggunakan total modal **{total_modal:,} GP** yang dibagi ke 3 slot GE (**{modal_per_slot:,.0f} GP per slot**).")
