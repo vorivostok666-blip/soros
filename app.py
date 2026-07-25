@@ -4,12 +4,13 @@ import requests
 import time
 import altair as alt
 import numpy as np
+import google.generativeai as genai
 
 # Konfigurasi Tampilan Halaman Web (Responsif untuk HP)
 st.set_page_config(page_title="OSRS My Favorite Flips", layout="centered")
 
 st.title("⭐ OSRS Personal Flipping Radar")
-st.write("Sinyal *trading* otomatis dengan **3 Radar Terpisah** (Disesuaikan untuk Modal 8 Juta GP).")
+st.write("Sinyal *trading* otomatis dengan **3 Radar Terpisah** & **Asisten AI Gemini** (Modal 8 Juta GP).")
 
 # ==========================================
 # 1. DAFTAR 19 ITEM FAVORIT REGULER (VOLUME / HARIAN)
@@ -32,7 +33,6 @@ JACKPOT_ITEMS = [
     "Gilded platebody", "Gilded full helm"
 ]
 
-# Gabungan semua item untuk pemindaian API
 ALL_MONITORED_ITEMS = REGULAR_FAVORITES + JACKPOT_ITEMS
 
 # ==========================================
@@ -45,12 +45,12 @@ current_time = time.time()
 is_outdated = (current_time - st.session_state['last_update']) > 60
 
 if is_outdated:
-    btn_bg = "#ffcc00"       # Kuning
+    btn_bg = "#ffcc00"
     btn_text_color = "black"
     btn_hover = "#e6b800"
     btn_label = "⚠️ Data Outdated - Pindai Ulang"
 else:
-    btn_bg = "#28a745"       # Hijau
+    btn_bg = "#28a745"
     btn_text_color = "white"
     btn_hover = "#218838"
     btn_label = "✅ Data Terupdate (Fresh)"
@@ -78,8 +78,8 @@ st.sidebar.header("⚙️ Pengaturan Modal GE")
 total_modal = st.sidebar.number_input(
     "Masukkan Total Modal Anda (GP):", 
     min_value=50000, 
-    value=8000000,  # <-- DIPERBARUI: Default modal langsung di 8 Juta (8m)
-    step=500000,    # <-- DIPERBARUI: Kelipatan tombol naik jadi 500k per klik
+    value=8000000, 
+    step=500000,
     format="%d",
     help="Modal ini akan dibagi rata ke 3 slot aktif Grand Exchange."
 )
@@ -125,19 +125,16 @@ def fetch_market_data():
         st.error(f"Gagal mengambil data API: {e}")
         return pd.DataFrame()
 
-# Tombol Eksekusi
 if st.sidebar.button(btn_label):
     fetch_market_data.clear()
     st.session_state['last_update'] = time.time()
     st.rerun()
 
-# Ambil data pasar utama
 with st.spinner('Memindai pasar untuk daftar reguler dan barang sultan Anda...'):
     master_data = fetch_market_data()
 
 if not master_data.empty:
     
-    # Fungsi 3-Way Safety Lock
     def apply_safety_lock(df):
         def safe_calc_qty(row):
             price = row['Live_Low']
@@ -156,14 +153,9 @@ if not master_data.empty:
         df['ROI_Persen'] = (df['Untung_Per_Biji'] / df['Live_Low']) * 100
         return df
 
-    # ==========================================
-    # TABEL 1: RADAR FAVORIT REGULER (ANJLOK > 2%)
-    # ==========================================
+    # TABEL 1
     st.subheader("🔥 Tabel 1: Favorit Reguler (Anjlok Tajam > 2%)")
-    st.write("Diskon besar komoditas harian Anda. Muncul jika **anjlok $\ge 2\%$** dan cuan:")
-
     df_reguler = master_data[master_data['mappingname'].isin(REGULAR_FAVORITES)].copy()
-    
     df_reg_2pct = df_reguler[
         (df_reguler['Live_Low'] > 0) & 
         (df_reguler['Hourly_Low'] > (df_reguler['Live_Low'] * 1.02)) & 
@@ -181,12 +173,8 @@ if not master_data.empty:
 
     st.divider()
 
-    # ==========================================
-    # TABEL 2: FAVORIT REGULER (TURUN TIPIS 0.5% - 2%)
-    # ==========================================
+    # TABEL 2
     st.subheader("⚡ Tabel 2: Favorit Reguler (Turun Tipis 0.5% - 2% / Main Cepat)")
-    st.write("Khusus komoditas laris yang **turun tipis 0.5% s/d 2%** — cocok untuk perputaran uang kilat:")
-
     df_reg_05pct = df_reguler[
         (df_reguler['Live_Low'] > 0) & 
         (df_reguler['Hourly_Low'] > (df_reguler['Live_Low'] * 1.005)) & 
@@ -205,15 +193,10 @@ if not master_data.empty:
 
     st.divider()
 
-    # ==========================================
-    # TABEL 3: RADAR SULTAN & JACKPOT (LANGKA / HIGH-MARGIN)
-    # ==========================================
+    # TABEL 3
     st.subheader("💎 Tabel 3: Radar SULTAN & JACKPOT (Item Langka)")
-    st.write("Memantau *Ham joint, Bryophyta staff,* dll. Muncul jika ada **Untung > 15.000 GP/biji** ATAU sedang **Anjlok Ekstrem (> 3%)**:")
-
     df_jackpot = master_data[master_data['mappingname'].isin(JACKPOT_ITEMS)].copy()
     df_jackpot['Untung_Per_Biji'] = df_jackpot['Hourly_Low'] - df_jackpot['Live_Low'] - df_jackpot['Tax']
-    
     df_jack_filtered = df_jackpot[
         (df_jackpot['Live_Low'] > 0) & 
         (df_jackpot['Untung_Per_Biji'] > 0) &
@@ -226,26 +209,22 @@ if not master_data.empty:
     if not df_jack_filtered.empty:
         res_jack = apply_safety_lock(df_jack_filtered).sort_values(by='Total_Untung_Slot', ascending=False)
         res_jack = res_jack.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian'})
-        st.success("🚨 ADA BARANG SULTAN YANG WORTH-IT! Segera cek grafiknya di bawah sebelum eksekusi!")
+        st.success("🚨 ADA BARANG SULTAN YANG WORTH-IT!")
         st.dataframe(res_jack[['Nama Barang', 'Harga Beli', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
     else:
         st.info("💡 Sedang tidak ada barang Sultan/Langka yang memberi margin besar saat ini.")
 
     st.divider()
 
-    # ==========================================
-    # FITUR GRAFIK: BACKTESTING AKURASI PROYEKSI VS REALITA (WIB)
-    # ==========================================
+    # GRAFIK & ANALISIS
     st.header("📈 Analisis Grafik & Proyeksi (Waktu WIB)")
-    st.write("Pilih barang dari daftar Anda untuk melihat riwayat harga, titik masuk/keluar, dan uji akurasi tren.")
-
     daftar_item = master_data.sort_values(by='mappingname')[['id', 'mappingname']].drop_duplicates()
     
     col1, col2 = st.columns([3, 1])
     with col1:
         pilihan_nama = st.selectbox("Pilih Barang (Reguler & Sultan):", daftar_item['mappingname'].tolist(), index=0)
     with col2:
-        rentang_waktu = st.selectbox("Interval:", ["5m", "1h", "6h", "24h"], index=1, help="5m=5 menit, 1h=1 jam")
+        rentang_waktu = st.selectbox("Interval:", ["5m", "1h", "6h", "24h"], index=1)
 
     id_terpilih = daftar_item[daftar_item['mappingname'] == pilihan_nama]['id'].values[0]
 
@@ -315,17 +294,9 @@ if not master_data.empty:
 
         col_acc1, col_acc2 = st.columns(2)
         with col_acc1:
-            st.metric(
-                label="🎯 Akurasi Proyeksi Beli", 
-                value=f"{akurasi_beli:.1f}%",
-                delta="Sangat Akurat (>90%)" if akurasi_beli >= 90 else "Akurasi Sedang" if akurasi_beli >= 80 else "Volatil / Berubah Mendadak"
-            )
+            st.metric(label="🎯 Akurasi Proyeksi Beli", value=f"{akurasi_beli:.1f}%")
         with col_acc2:
-            st.metric(
-                label="🎯 Akurasi Proyeksi Jual", 
-                value=f"{akurasi_jual:.1f}%",
-                delta="Sangat Akurat (>90%)" if akurasi_jual >= 90 else "Akurasi Sedang" if akurasi_jual >= 80 else "Volatil / Berubah Mendadak"
-            )
+            st.metric(label="🎯 Akurasi Proyeksi Jual", value=f"{akurasi_jual:.1f}%")
 
         line_low = alt.Chart(df_chart).mark_line(color='#00a8ff', strokeWidth=2).encode(
             x=alt.X('Waktu:T', title='Waktu (WIB)'),
@@ -336,67 +307,55 @@ if not master_data.empty:
                 alt.Tooltip('avgHighPrice:Q', title='Realita Harga Jual', format=',.0f')
             ]
         )
-        
-        line_high = alt.Chart(df_chart).mark_line(color='#e84118', strokeWidth=2).encode(
-            x='Waktu:T',
-            y='avgHighPrice:Q'
-        )
+        line_high = alt.Chart(df_chart).mark_line(color='#e84118', strokeWidth=2).encode(x='Waktu:T', y='avgHighPrice:Q')
+        line_future_low = alt.Chart(df_proj_eval).mark_line(color='#00d2d3', strokeDash=[4, 4], strokeWidth=3).encode(x='Waktu:T', y='Proyeksi_Beli:Q')
+        line_future_high = alt.Chart(df_proj_eval).mark_line(color='#ff9f43', strokeDash=[4, 4], strokeWidth=3).encode(x='Waktu:T', y='Proyeksi_Jual:Q')
 
-        line_future_low = alt.Chart(df_proj_eval).mark_line(color='#00d2d3', strokeDash=[4, 4], strokeWidth=3).encode(
-            x='Waktu:T',
-            y='Proyeksi_Beli:Q',
-            tooltip=[
-                alt.Tooltip('Waktu:T', title='Waktu Evaluasi (WIB)', format='%H:%M'),
-                alt.Tooltip('Proyeksi_Beli:Q', title='🔮 Proyeksi Beli (Ramalan)', format=',.0f')
-            ]
-        )
+        points_buy = alt.Chart(df_chart.dropna(subset=['Saran_Beli'])).mark_point(shape='triangle-up', size=180, color='#00e676', filled=True).encode(x='Waktu:T', y='Saran_Beli:Q')
+        points_sell = alt.Chart(df_chart.dropna(subset=['Saran_Jual'])).mark_point(shape='triangle-down', size=180, color='#ff1744', filled=True).encode(x='Waktu:T', y='Saran_Jual:Q')
 
-        line_future_high = alt.Chart(df_proj_eval).mark_line(color='#ff9f43', strokeDash=[4, 4], strokeWidth=3).encode(
-            x='Waktu:T',
-            y='Proyeksi_Jual:Q',
-            tooltip=[
-                alt.Tooltip('Waktu:T', title='Waktu Evaluasi (WIB)', format='%H:%M'),
-                alt.Tooltip('Proyeksi_Jual:Q', title='🔮 Proyeksi Jual (Ramalan)', format=',.0f')
-            ]
-        )
-
-        points_buy = alt.Chart(df_chart.dropna(subset=['Saran_Beli'])).mark_point(
-            shape='triangle-up', size=180, color='#00e676', filled=True
-        ).encode(
-            x='Waktu:T', 
-            y='Saran_Beli:Q',
-            tooltip=[
-                alt.Tooltip('Waktu:T', title='Waktu Beli (WIB)', format='%H:%M'),
-                alt.Tooltip('Saran_Beli:Q', title='🟢 SARAN BELI', format=',.0f')
-            ]
-        )
-
-        points_sell = alt.Chart(df_chart.dropna(subset=['Saran_Jual'])).mark_point(
-            shape='triangle-down', size=180, color='#ff1744', filled=True
-        ).encode(
-            x='Waktu:T', 
-            y='Saran_Jual:Q',
-            tooltip=[
-                alt.Tooltip('Waktu:T', title='Waktu Jual (WIB)', format='%H:%M'),
-                alt.Tooltip('Saran_Jual:Q', title='🔴 SARAN JUAL', format=',.0f')
-            ]
-        )
-
-        chart_final = alt.layer(
-            line_low, line_high, 
-            line_future_low, line_future_high, 
-            points_buy, points_sell
-        ).interactive()
-        
+        chart_final = alt.layer(line_low, line_high, line_future_low, line_future_high, points_buy, points_sell).interactive()
         st.altair_chart(chart_final, use_container_width=True)
-        
-        st.markdown("""
-        💡 **Tips Modal 8 Juta GP:**
-        * 💰 Alokasi modal per slot Anda sekarang sekitar **2,66 Juta GP**. 
-        * 💎 Manfaatkan modal besar ini untuk mulai melirik **Tabel 3 (Radar Sultan)** karena Anda kini mampu memborong item bernilai tinggi tanpa takut kekurangan dana tunai.
-        """)
     else:
-        st.warning(f"Belum ada data grafik historis yang cukup untuk barang **{pilihan_nama}** pada interval waktu **{rentang_waktu}**.")
+        st.warning(f"Belum ada data grafik historis yang cukup untuk barang **{pilihan_nama}**.")
+
+    # ==========================================
+    # FITUR ASISTEN AI GEMINI (TERINTEGRASI)
+    # ==========================================
+    st.divider()
+    st.header("🤖 Tanya AI Flipper (Asisten Pribadi)")
+    st.write("Butuh analisis cepat tanpa screenshot? Masukkan API Key Anda di bawah dan tanyakan langsung ke AI!")
+
+    gemini_key = st.text_input("Masukkan Gemini API Key Anda:", type="password")
+
+    if gemini_key:
+        genai.configure(api_key=gemini_key)
+        ai_model = genai.GenerativeModel("gemini-1.5-flash")
+
+        pertanyaan_user = st.text_input(
+            "Tulis pertanyaan atau analisis untuk item ini:",
+            value=f"Bagaimana analisis untuk item {pilihan_nama} pada interval {rentang_waktu} saat ini?"
+        )
+
+        if st.button("🚀 Minta Analisis AI"):
+            if pertanyaan_user:
+                with st.spinner("AI sedang membaca data pasar..."):
+                    prompt_lengkap = f"""
+                    Kamu adalah seorang ahli OSRS F2P flipping dengan modal 8 Juta GP. 
+                    Pengguna sedang melihat item: {pilihan_nama} pada interval waktu {rentang_waktu}.
+                    Pertanyaan pengguna: {pertanyaan_user}
+                    Berikan saran trading yang tajam, ringkas, dan to the point (apakah layak dibeli, estimasi harga aman, dan manajemen risikonya). Gunakan bahasa Indonesia santai.
+                    """
+                    try:
+                        response = ai_model.generate_content(prompt_lengkap)
+                        st.success("✨ Hasil Analisis AI:")
+                        st.write(response.text)
+                    except Exception as e:
+                        st.error(f"Gagal menghubungi Gemini API: {e}")
+            else:
+                st.warning("Silakan tulis pertanyaannya terlebih dahulu.")
+    else:
+        st.info("🔑 Masukkan Gemini API Key Anda di atas untuk mengaktifkan asisten AI pintar.")
 
     st.divider()
     st.info(f"💡 Info: Perhitungan menggunakan total modal **{total_modal:,} GP** yang dibagi ke 3 slot GE (**{modal_per_slot:,.0f} GP per slot**).")
