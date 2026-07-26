@@ -4,59 +4,45 @@ import requests
 import time
 import altair as alt
 import numpy as np
+from common import fetch_mapping, fetch_latest, fetch_1h, fetch_24h, calc_ge_tax
 
 # Konfigurasi Tampilan Halaman Web (Responsif untuk HP)
 st.set_page_config(page_title="OSRS Global Flipping Radar", layout="centered")
 
 st.title("⭐ OSRS Global Flipping Radar")
-st.write("Sinyal *trading* otomatis untuk **SEMUA ITEM OSRS (F2P & Member)** dengan 4 Radar Terpisah & Dual Chart (Modal 8 Juta GP).")
+st.write("Sinyal *trading* otomatis untuk **SEMUA ITEM OSRS (F2P & Member)** dengan 4 Radar Terpisah & Dual Chart.")
 st.caption(
     "ℹ️ Kolom **Maks Beli (BEP)** = batas harga beli tertinggi sebelum kamu balik modal (breakeven), "
     "dihitung dari Harga Jual dikurangi Pajak GE. Kalau kamu naikkan harga beli untuk mempercepat fill, "
     "jangan sampai melewati angka ini. Kolom **Status Harga** menandai seberapa lega ruang kenaikannya: "
     "🟢 Aman Dinaikkan (≥2% dari Harga Beli) · 🟡 Pas-pasan (0.5%–2%) · 🔴 Jangan Naikkan (<0.5%, nyaris tidak ada ruang)."
 )
+st.caption("🏭 Mau lihat strategi lain? Buka halaman **Low-Effort Processing** di sidebar kiri untuk margin bahan mentah → barang jadi (Decanting, Voidwaker, Godsword, Torva, dll).")
 
 # ==========================================
 # FUNGSI MENGAMBIL SEMUA ITEM DARI API WIKI (F2P + MEMBER)
+# Catatan: fungsi fetch_mapping/fetch_1h/fetch_24h/fetch_latest sekarang
+# ada di common.py supaya bisa dipakai bareng dengan halaman lain
+# (Low-Effort Processing) tanpa duplikasi kode.
 # ==========================================
 @st.cache_data(ttl=60)
 def fetch_market_data():
-    headers = {'User-Agent': 'Belajar_Data_Analisis_Bot_Lokal'}
     try:
-        # 1. Ambil Mapping SEMUA item (F2P & Member, tidak difilter lagi)
-        req_map = requests.get('https://prices.runescape.wiki/api/v1/osrs/mapping', headers=headers)
-        df_map = pd.DataFrame(req_map.json())[['id', 'name', 'limit', 'members']]
-        df_map.rename(columns={'name': 'mappingname', 'limit': 'mappinglimit'}, inplace=True)
-
-        # 2. Ambil Data Harga 1h, 24h, Latest
-        req_1h = requests.get('https://prices.runescape.wiki/api/v1/osrs/1h', headers=headers)
-        df_1h = pd.DataFrame.from_dict(req_1h.json()['data'], orient='index').reset_index()
-        df_1h.rename(columns={'index': 'id', 'avgLowPrice': 'Hourly_Low', 'lowPriceVolume': 'H_VolLow'}, inplace=True)
-
-        req_24h = requests.get('https://prices.runescape.wiki/api/v1/osrs/24h', headers=headers)
-        df_24h = pd.DataFrame.from_dict(req_24h.json()['data'], orient='index').reset_index()
-        df_24h.rename(columns={'index': 'id', 'avgLowPrice': 'Daily_Low', 'avgHighPrice': 'Daily_High', 'lowPriceVolume': 'D_VolLow'}, inplace=True)
-
-        req_latest = requests.get('https://prices.runescape.wiki/api/v1/osrs/latest', headers=headers)
-        df_latest = pd.DataFrame.from_dict(req_latest.json()['data'], orient='index').reset_index()
-        df_latest.rename(columns={'index': 'id', 'low': 'Live_Low', 'high': 'Live_High'}, inplace=True)
-
-        for df in [df_1h, df_24h, df_latest, df_map]:
-            df['id'] = pd.to_numeric(df['id'], errors='coerce').fillna(0).astype(int)
+        df_map = fetch_mapping()
+        df_1h = fetch_1h()
+        df_24h = fetch_24h()
+        df_latest = fetch_latest()
 
         # Gabungkan semua data berdasarkan ID
         master = df_1h.merge(df_24h, on='id').merge(df_latest, on='id').merge(df_map, on='id', how='inner')
-        
+
         for col in ['Hourly_Low', 'Live_Low', 'Daily_Low', 'Daily_High', 'D_VolLow', 'H_VolLow', 'mappinglimit']:
             if col in master.columns:
                 master[col] = pd.to_numeric(master[col], errors='coerce').fillna(0)
 
-        # Tandai tipe barang: F2P atau Member-only
-        master['Tipe'] = master['members'].apply(lambda m: '👑 Member' if m else '🆓 F2P')
-
-        # Hitung Pajak GE (2% untuk item di atas 100 GP)
-        master['Tax'] = master['Hourly_Low'].apply(lambda x: 0 if x < 100 else round((x * 0.02) - 0.5))
+        # Hitung Pajak GE (2%, dibatasi maks 5 juta GP per item — penting sekarang
+        # karena item Member bisa bernilai ratusan juta GP)
+        master['Tax'] = master['Hourly_Low'].apply(calc_ge_tax)
         return master
     except Exception as e:
         st.error(f"Gagal mengambil data API: {e}")
@@ -179,17 +165,23 @@ div[data-testid="stSidebar"] .stButton > button:hover {{
 # FITUR INPUT MODAL BEBAS OLEH PENGGUNA
 # ==========================================
 st.sidebar.header("⚙️ Pengaturan Modal GE")
+tipe_akun = st.sidebar.radio(
+    "Tipe Akun", options=["Member (8 Slot)", "F2P (3 Slot)"], index=0,
+    help="Menentukan berapa banyak slot Grand Exchange aktif yang kamu punya untuk radar ini."
+)
+jumlah_slot = 8 if tipe_akun.startswith("Member") else 3
+
 total_modal = st.sidebar.number_input(
     "Masukkan Total Modal Anda (GP):", 
     min_value=50000, 
-    value=8000000, 
-    step=500000,
+    value=1500000, 
+    step=100000,
     format="%d",
-    help="Modal ini akan dibagi rata ke 3 slot aktif Grand Exchange."
+    help=f"Modal ini akan dibagi rata ke {jumlah_slot} slot aktif Grand Exchange."
 )
 
-modal_per_slot = total_modal / 3
-st.sidebar.info(f"💰 Modal per Slot (3 Slot): **{modal_per_slot:,.0f} GP**")
+modal_per_slot = total_modal / jumlah_slot
+st.sidebar.info(f"💰 Modal per Slot ({jumlah_slot} Slot): **{modal_per_slot:,.0f} GP**")
 
 st.sidebar.header("🔬 Verifikasi Shock Mendalam")
 st.sidebar.caption("Berdasarkan metodologi poignanttech.com — cek dip terhadap harga terendah 14 & 30 hari terakhir, bukan cuma rata-rata 24 jam.")
@@ -541,7 +533,7 @@ if not master_data.empty:
     render_chart("1 Jam (Macro / Tren Utama)", "1h")
 
     st.divider()
-    st.info(f"💡 Info: Perhitungan menggunakan total modal **{total_modal:,} GP** yang dibagi ke 3 slot GE (**{modal_per_slot:,.0f} GP per slot**).")
+    st.info(f"💡 Info: Perhitungan menggunakan total modal **{total_modal:,} GP** yang dibagi ke {jumlah_slot} slot GE (**{modal_per_slot:,.0f} GP per slot**).")
 
 else:
     st.error("Gagal memuat data master pasar. Silakan klik tombol perbarui.")
