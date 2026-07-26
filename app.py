@@ -17,7 +17,9 @@ st.caption(
     "jangan sampai melewati angka ini. Kolom **Status Harga** menandai seberapa lega ruang kenaikannya: "
     "🟢 Aman Dinaikkan (≥2% dari Harga Beli) · 🟡 Pas-pasan (0.5%–2%) · 🔴 Jangan Naikkan (<0.5%, nyaris tidak ada ruang)."
 )
-st.caption("🏭 Mau lihat strategi lain? Buka halaman **Low-Effort Processing** di sidebar kiri untuk margin bahan mentah → barang jadi (Decanting, Voidwaker, Godsword, Torva, dll).")
+st.caption("Butuh strategi bahan mentah → barang jadi? Buka Low-Effort Processing untuk Decanting, Voidwaker, Godsword, Torva, dan lainnya.")
+if st.button("🏭 Buka Low-Effort Processing", type="primary", use_container_width=True):
+    st.switch_page("pages/1_low_effort_processing.py")
 
 # ==========================================
 # FUNGSI MENGAMBIL SEMUA ITEM DARI API WIKI (F2P + MEMBER)
