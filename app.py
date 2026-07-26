@@ -6,10 +6,10 @@ import altair as alt
 import numpy as np
 
 # Konfigurasi Tampilan Halaman Web (Responsif untuk HP)
-st.set_page_config(page_title="OSRS F2P Global Flipping Radar", layout="centered")
+st.set_page_config(page_title="OSRS Global Flipping Radar", layout="centered")
 
-st.title("⭐ OSRS Global F2P Flipping Radar")
-st.write("Sinyal *trading* otomatis untuk **SEMUA ITEM F2P OSRS** dengan 4 Radar Terpisah & Dual Chart (Modal 8 Juta GP).")
+st.title("⭐ OSRS Global Flipping Radar")
+st.write("Sinyal *trading* otomatis untuk **SEMUA ITEM OSRS (F2P & Member)** dengan 4 Radar Terpisah & Dual Chart (Modal 8 Juta GP).")
 st.caption(
     "ℹ️ Kolom **Maks Beli (BEP)** = batas harga beli tertinggi sebelum kamu balik modal (breakeven), "
     "dihitung dari Harga Jual dikurangi Pajak GE. Kalau kamu naikkan harga beli untuk mempercepat fill, "
@@ -18,16 +18,15 @@ st.caption(
 )
 
 # ==========================================
-# FUNGSI MENGAMBIL SEMUA ITEM F2P DARI API WIKI
+# FUNGSI MENGAMBIL SEMUA ITEM DARI API WIKI (F2P + MEMBER)
 # ==========================================
 @st.cache_data(ttl=60)
 def fetch_market_data():
     headers = {'User-Agent': 'Belajar_Data_Analisis_Bot_Lokal'}
     try:
-        # 1. Ambil Mapping dan filter HANYA F2P (members == False)
+        # 1. Ambil Mapping SEMUA item (F2P & Member, tidak difilter lagi)
         req_map = requests.get('https://prices.runescape.wiki/api/v1/osrs/mapping', headers=headers)
         df_map = pd.DataFrame(req_map.json())[['id', 'name', 'limit', 'members']]
-        df_map = df_map[df_map['members'] == False]
         df_map.rename(columns={'name': 'mappingname', 'limit': 'mappinglimit'}, inplace=True)
 
         # 2. Ambil Data Harga 1h, 24h, Latest
@@ -46,12 +45,15 @@ def fetch_market_data():
         for df in [df_1h, df_24h, df_latest, df_map]:
             df['id'] = pd.to_numeric(df['id'], errors='coerce').fillna(0).astype(int)
 
-        # Gabungkan semua data berdasarkan ID F2P
+        # Gabungkan semua data berdasarkan ID
         master = df_1h.merge(df_24h, on='id').merge(df_latest, on='id').merge(df_map, on='id', how='inner')
         
         for col in ['Hourly_Low', 'Live_Low', 'Daily_Low', 'Daily_High', 'D_VolLow', 'H_VolLow', 'mappinglimit']:
             if col in master.columns:
                 master[col] = pd.to_numeric(master[col], errors='coerce').fillna(0)
+
+        # Tandai tipe barang: F2P atau Member-only
+        master['Tipe'] = master['members'].apply(lambda m: '👑 Member' if m else '🆓 F2P')
 
         # Hitung Pajak GE (2% untuk item di atas 100 GP)
         master['Tax'] = master['Hourly_Low'].apply(lambda x: 0 if x < 100 else round((x * 0.02) - 0.5))
@@ -210,7 +212,7 @@ if st.sidebar.button(btn_label):
     st.session_state['last_update'] = time.time()
     st.rerun()
 
-with st.spinner('Memindai seluruh pasar F2P OSRS...'):
+with st.spinner('Memindai seluruh pasar OSRS (F2P & Member)...'):
     master_data = fetch_market_data()
 
 if not master_data.empty:
@@ -252,10 +254,10 @@ if not master_data.empty:
         return df
 
     # ==========================================
-    # TABEL 1: SEMUA ITEM F2P (ANJLOK > 2%)
+    # TABEL 1: SEMUA ITEM (ANJLOK > 2%)
     # ==========================================
-    st.subheader("🔥 Tabel 1: Global F2P — Anjlok Tajam (> 2%)")
-    st.write("Semua barang F2P di game yang sedang mengalami diskon besar dan menguntungkan:")
+    st.subheader("🔥 Tabel 1: Global — Anjlok Tajam (> 2%)")
+    st.write("Semua barang (F2P & Member) di game yang sedang mengalami diskon besar dan menguntungkan:")
 
     df_f2p_2pct = master_data[
         (master_data['Live_Low'] > 0) & 
@@ -268,18 +270,18 @@ if not master_data.empty:
         df_f2p_2pct['Untung_Per_Biji'] = df_f2p_2pct['Hourly_Low'] - df_f2p_2pct['Live_Low'] - df_f2p_2pct['Tax']
         res_f2p1 = apply_safety_lock(df_f2p_2pct).sort_values(by='Total_Untung_Slot', ascending=False)
         res_f2p1_display = res_f2p1.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga'})
-        st.dataframe(res_f2p1_display[['Nama Barang', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
+        st.dataframe(res_f2p1_display[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
     else:
         res_f2p1 = pd.DataFrame()
-        st.warning("⏳ Tidak ada item F2P yang sedang anjlok > 2% saat ini.")
+        st.warning("⏳ Tidak ada item yang sedang anjlok > 2% saat ini.")
 
     st.divider()
 
     # ==========================================
-    # TABEL 2: SEMUA ITEM F2P (TURUN TIPIS 0.5% - 2%)
+    # TABEL 2: SEMUA ITEM (TURUN TIPIS 0.5% - 2%)
     # ==========================================
-    st.subheader("⚡ Tabel 2: Global F2P — Turun Tipis (0.5% - 2% / Main Cepat)")
-    st.write("Semua barang F2P berliku cepat yang sedang turun tipis — cocok untuk *scalping* kilat:")
+    st.subheader("⚡ Tabel 2: Global — Turun Tipis (0.5% - 2% / Main Cepat)")
+    st.write("Semua barang (F2P & Member) berliku cepat yang sedang turun tipis — cocok untuk *scalping* kilat:")
 
     df_f2p_05pct = master_data[
         (master_data['Live_Low'] > 0) & 
@@ -293,18 +295,18 @@ if not master_data.empty:
         df_f2p_05pct['Untung_Per_Biji'] = df_f2p_05pct['Hourly_Low'] - df_f2p_05pct['Live_Low'] - df_f2p_05pct['Tax']
         res_f2p2 = apply_safety_lock(df_f2p_05pct).sort_values(by='Total_Untung_Slot', ascending=False)
         res_f2p2_display = res_f2p2.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga'})
-        st.dataframe(res_f2p2_display[['Nama Barang', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
+        st.dataframe(res_f2p2_display[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
     else:
         res_f2p2 = pd.DataFrame()
-        st.info("💡 Tidak ada item F2P yang sedang turun tipis (0.5%-2%) saat ini.")
+        st.info("💡 Tidak ada item yang sedang turun tipis (0.5%-2%) saat ini.")
 
     st.divider()
 
     # ==========================================
-    # TABEL 3: RADAR SULTAN & HIGH-MARGIN F2P
+    # TABEL 3: RADAR SULTAN & HIGH-MARGIN
     # ==========================================
-    st.subheader("💎 Tabel 3: Global F2P — Radar SULTAN & High-Margin")
-    st.write("Memindai seluruh item bernilai tinggi di F2P yang memberikan **Untung ≥ 15.000 GP/biji** ATAU **Anjlok Ekstrem (> 3%)**:")
+    st.subheader("💎 Tabel 3: Global — Radar SULTAN & High-Margin")
+    st.write("Memindai seluruh item bernilai tinggi (F2P & Member) yang memberikan **Untung ≥ 15.000 GP/biji** ATAU **Anjlok Ekstrem (> 3%)**:")
 
     master_data['Untung_Per_Biji'] = master_data['Hourly_Low'] - master_data['Live_Low'] - master_data['Tax']
     df_f2p_jackpot = master_data[
@@ -319,10 +321,10 @@ if not master_data.empty:
     if not df_f2p_jackpot.empty:
         res_f2p_jack = apply_safety_lock(df_f2p_jackpot).sort_values(by='Total_Untung_Slot', ascending=False)
         res_f2p_jack = res_f2p_jack.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga'})
-        st.success("🚨 ADA PELUANG SULTAN F2P YANG WORTH-IT!")
-        st.dataframe(res_f2p_jack[['Nama Barang', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
+        st.success("🚨 ADA PELUANG SULTAN YANG WORTH-IT!")
+        st.dataframe(res_f2p_jack[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
     else:
-        st.info("💡 Sedang tidak ada barang Sultan F2P ber-margin besar saat ini.")
+        st.info("💡 Sedang tidak ada barang Sultan ber-margin besar saat ini.")
 
     st.divider()
 
@@ -399,7 +401,7 @@ if not master_data.empty:
                 })
                 st.success(f"✅ {len(df_verified)} item lolos verifikasi shock dip historis!")
                 st.dataframe(
-                    df_verified[['Nama Barang', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']],
+                    df_verified[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']],
                     use_container_width=True
                 )
             else:
@@ -421,13 +423,13 @@ if not master_data.empty:
     st.divider()
 
     # ==========================================
-    # DUAL CHART (SEMUA ITEM F2P)
+    # DUAL CHART (SEMUA ITEM)
     # ==========================================
-    st.header("📈 Dual Chart Analisis (Semua Item F2P)")
-    st.write("Pilih barang apa saja dari seluruh item F2P OSRS untuk melihat grafik 5m & 1h secara bersamaan.")
+    st.header("📈 Dual Chart Analisis (Semua Item)")
+    st.write("Pilih barang apa saja dari seluruh item OSRS (F2P & Member) untuk melihat grafik 5m & 1h secara bersamaan.")
 
     daftar_item = master_data.sort_values(by='mappingname')[['id', 'mappingname']].drop_duplicates()
-    pilihan_nama = st.selectbox("Pilih Barang F2P:", daftar_item['mappingname'].tolist(), index=0)
+    pilihan_nama = st.selectbox("Pilih Barang:", daftar_item['mappingname'].tolist(), index=0)
     id_terpilih = daftar_item[daftar_item['mappingname'] == pilihan_nama]['id'].values[0]
 
     @st.cache_data(ttl=180)
