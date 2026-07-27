@@ -3,4 +3,4 @@ pandas
 requests
 altair
 numpy
-vl-convert-python
+streamlit-autorefresh
