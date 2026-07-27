@@ -10,7 +10,7 @@ from pathlib import Path
 from streamlit_autorefresh import st_autorefresh
 
 # Konfigurasi Tampilan Halaman Web (Responsif untuk HP)
-st.set_page_config(page_title="OSRS Global Flipping Radar", layout="centered")
+st.set_page_config(page_title="OSRS Global Flipping Radar", layout="wide")
 
 # Auto-refresh seluruh app tiap 1 menit (60.000 ms) — pas dengan cache data (ttl=60
 # detik), jadi dijamin selalu dapat data BARU tiap kali refresh tanpa sia-sia nanya
