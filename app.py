@@ -19,7 +19,7 @@ st.caption(
 )
 st.caption("Butuh strategi bahan mentah → barang jadi? Buka Low-Effort Processing untuk Decanting, Voidwaker, Godsword, Torva, dan lainnya.")
 if st.button("🏭 Buka Low-Effort Processing", type="primary", use_container_width=True):
-    st.switch_page("pages/1_low_effort_processing.py")
+    #st.switch_page("pages/1_low_effort_processing.py")
 
 # ==========================================
 # FUNGSI MENGAMBIL SEMUA ITEM DARI API WIKI (F2P + MEMBER)
