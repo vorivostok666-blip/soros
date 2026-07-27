@@ -18,7 +18,7 @@ st.caption(
     "🟢 Aman Dinaikkan (≥2% dari Harga Beli) · 🟡 Pas-pasan (0.5%–2%) · 🔴 Jangan Naikkan (<0.5%, nyaris tidak ada ruang)."
 )
 st.caption("Butuh strategi bahan mentah → barang jadi? Buka Low-Effort Processing untuk Decanting, Voidwaker, Godsword, Torva, dan lainnya.")
-if st.button("🏭 Buka Low-Effort Processing", type="primary", use_container_width=True):
+#if st.button("🏭 Buka Low-Effort Processing", type="primary", use_container_width=True):
     #st.switch_page("pages/1_low_effort_processing.py")
 
 # ==========================================
