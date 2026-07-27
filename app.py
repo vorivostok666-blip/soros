@@ -286,7 +286,8 @@ if halaman == "🎯 Shock Dip Radar":
     # otomatis restart ke 1:00 tiap kali app rerun (baik dari auto-refresh 1 menit
     # maupun klik manual), jadi selalu sinkron dengan refresh yang sesungguhnya.
     with st.sidebar:
-        components.html("""
+        components.html(f"""
+            <!-- nonce:{time.time()} -->
             <div style="text-align:center; font-family:sans-serif; padding:4px 0;">
                 <span id="cd-label" style="font-size:0.85em; color:#888;">Refresh berikutnya dalam</span><br>
                 <span id="cd-timer" style="font-size:1.6em; font-weight:bold; color:#28a745;">01:00</span>
@@ -295,25 +296,25 @@ if halaman == "🎯 Shock Dip Radar":
                 let total = 60;
                 const timerEl = document.getElementById('cd-timer');
                 const labelEl = document.getElementById('cd-label');
-                function tick() {
-                    if (total <= 0) {
+                function tick() {{
+                    if (total <= 0) {{
                         timerEl.textContent = "00:00";
                         timerEl.style.color = "#dc3545";
                         labelEl.textContent = "Sedang refresh...";
                         return;
-                    }
+                    }}
                     const m = String(Math.floor(total / 60)).padStart(2, '0');
                     const s = String(total % 60).padStart(2, '0');
                     timerEl.textContent = m + ":" + s;
-                    if (total <= 10) {
+                    if (total <= 10) {{
                         timerEl.style.color = "#dc3545";
                         labelEl.textContent = "⚠️ Bersiap-siap, refresh sebentar lagi";
-                    } else {
+                    }} else {{
                         timerEl.style.color = "#28a745";
                         labelEl.textContent = "Refresh berikutnya dalam";
-                    }
+                    }}
                     total -= 1;
-                }
+                }}
                 tick();
                 setInterval(tick, 1000);
             </script>
