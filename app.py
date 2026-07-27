@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import requests
 import time
@@ -281,6 +282,45 @@ if halaman == "🎯 Shock Dip Radar":
     )
 
     st.sidebar.caption("🔄 Auto-refresh aktif — data ambil ulang otomatis tiap 5 menit.")
+
+    # Countdown JS murni (jalan di browser, per detik) -- sengaja TIDAK pakai rerun
+    # Streamlit tiap detik karena itu akan bikin seluruh app lag/flicker. Timer ini
+    # otomatis restart ke 5:00 tiap kali app rerun (baik dari auto-refresh 5 menit
+    # maupun klik manual), jadi selalu sinkron dengan refresh yang sesungguhnya.
+    with st.sidebar:
+        components.html("""
+            <div style="text-align:center; font-family:sans-serif; padding:4px 0;">
+                <span id="cd-label" style="font-size:0.85em; color:#888;">Refresh berikutnya dalam</span><br>
+                <span id="cd-timer" style="font-size:1.6em; font-weight:bold; color:#28a745;">05:00</span>
+            </div>
+            <script>
+                let total = 300;
+                const timerEl = document.getElementById('cd-timer');
+                const labelEl = document.getElementById('cd-label');
+                function tick() {
+                    if (total <= 0) {
+                        timerEl.textContent = "00:00";
+                        timerEl.style.color = "#dc3545";
+                        labelEl.textContent = "Sedang refresh...";
+                        return;
+                    }
+                    const m = String(Math.floor(total / 60)).padStart(2, '0');
+                    const s = String(total % 60).padStart(2, '0');
+                    timerEl.textContent = m + ":" + s;
+                    if (total <= 30) {
+                        timerEl.style.color = "#dc3545";
+                        labelEl.textContent = "⚠️ Bersiap-siap, refresh sebentar lagi";
+                    } else {
+                        timerEl.style.color = "#28a745";
+                        labelEl.textContent = "Refresh berikutnya dalam";
+                    }
+                    total -= 1;
+                }
+                tick();
+                setInterval(tick, 1000);
+            </script>
+        """, height=70)
+
     if st.sidebar.button("🔄 Refresh Sekarang"):
         fetch_market_data.clear()
         st.session_state['last_update'] = time.time()
