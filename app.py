@@ -12,12 +12,10 @@ from streamlit_autorefresh import st_autorefresh
 # Konfigurasi Tampilan Halaman Web (Responsif untuk HP)
 st.set_page_config(page_title="OSRS Global Flipping Radar", layout="centered")
 
-# Auto-refresh seluruh app tiap 5 menit (300.000 ms) — otomatis, tidak perlu klik apa pun.
-# Cache data (ttl=60 detik) akan expired duluan sebelum ini nembak, jadi tiap auto-refresh
-# dijamin ambil data FRESH dari API wiki OSRS, bukan cuma me-render ulang data lama.
-# Pilihan halaman & pengaturan sidebar TIDAK ikut ke-reset karena ini rerun biasa,
-# bukan reload browser.
-st_autorefresh(interval=5 * 60 * 1000, key="auto_refresh_5menit")
+# Auto-refresh seluruh app tiap 1 menit (60.000 ms) — pas dengan cache data (ttl=60
+# detik), jadi dijamin selalu dapat data BARU tiap kali refresh tanpa sia-sia nanya
+# ke API lebih sering dari yang perlu.
+st_autorefresh(interval=1 * 60 * 1000, key="auto_refresh_1menit")
 
 # ==========================================
 # FUNGSI BERSAMA (dulu di common.py, sekarang digabung di sini
@@ -281,20 +279,20 @@ if halaman == "🎯 Shock Dip Radar":
         help="Item dengan potensi untung per slot di bawah angka ini akan disaring dari Tabel 4 (Verified Shock Dips)."
     )
 
-    st.sidebar.caption("🔄 Auto-refresh aktif — data ambil ulang otomatis tiap 5 menit.")
+    st.sidebar.caption("🔄 Auto-refresh aktif — data ambil ulang otomatis tiap 1 menit.")
 
     # Countdown JS murni (jalan di browser, per detik) -- sengaja TIDAK pakai rerun
     # Streamlit tiap detik karena itu akan bikin seluruh app lag/flicker. Timer ini
-    # otomatis restart ke 5:00 tiap kali app rerun (baik dari auto-refresh 5 menit
+    # otomatis restart ke 1:00 tiap kali app rerun (baik dari auto-refresh 1 menit
     # maupun klik manual), jadi selalu sinkron dengan refresh yang sesungguhnya.
     with st.sidebar:
         components.html("""
             <div style="text-align:center; font-family:sans-serif; padding:4px 0;">
                 <span id="cd-label" style="font-size:0.85em; color:#888;">Refresh berikutnya dalam</span><br>
-                <span id="cd-timer" style="font-size:1.6em; font-weight:bold; color:#28a745;">05:00</span>
+                <span id="cd-timer" style="font-size:1.6em; font-weight:bold; color:#28a745;">01:00</span>
             </div>
             <script>
-                let total = 300;
+                let total = 60;
                 const timerEl = document.getElementById('cd-timer');
                 const labelEl = document.getElementById('cd-label');
                 function tick() {
@@ -307,7 +305,7 @@ if halaman == "🎯 Shock Dip Radar":
                     const m = String(Math.floor(total / 60)).padStart(2, '0');
                     const s = String(total % 60).padStart(2, '0');
                     timerEl.textContent = m + ":" + s;
-                    if (total <= 30) {
+                    if (total <= 10) {
                         timerEl.style.color = "#dc3545";
                         labelEl.textContent = "⚠️ Bersiap-siap, refresh sebentar lagi";
                     } else {
