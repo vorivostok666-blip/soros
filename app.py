@@ -6,9 +6,17 @@ import altair as alt
 import numpy as np
 import math
 from pathlib import Path
+from streamlit_autorefresh import st_autorefresh
 
 # Konfigurasi Tampilan Halaman Web (Responsif untuk HP)
 st.set_page_config(page_title="OSRS Global Flipping Radar", layout="centered")
+
+# Auto-refresh seluruh app tiap 5 menit (300.000 ms) — otomatis, tidak perlu klik apa pun.
+# Cache data (ttl=60 detik) akan expired duluan sebelum ini nembak, jadi tiap auto-refresh
+# dijamin ambil data FRESH dari API wiki OSRS, bukan cuma me-render ulang data lama.
+# Pilihan halaman & pengaturan sidebar TIDAK ikut ke-reset karena ini rerun biasa,
+# bukan reload browser.
+st_autorefresh(interval=5 * 60 * 1000, key="auto_refresh_5menit")
 
 # ==========================================
 # FUNGSI BERSAMA (dulu di common.py, sekarang digabung di sini
@@ -214,37 +222,22 @@ if halaman == "🎯 Shock Dip Radar":
         return hasil
 
     # ==========================================
-    # LOGIKA WAKTU & WARNA TOMBOL (KUNING / HIJAU)
+    # AUTO-REFRESH (5 MENIT) & TOMBOL REFRESH MANUAL
     # ==========================================
-    if 'last_update' not in st.session_state:
-        st.session_state['last_update'] = time.time()
-
-    current_time = time.time()
-    is_outdated = (current_time - st.session_state['last_update']) > 60
-
-    if is_outdated:
-        btn_bg = "#ffcc00"
-        btn_text_color = "black"
-        btn_hover = "#e6b800"
-        btn_label = "⚠️ Data Outdated - Pindai Ulang"
-    else:
-        btn_bg = "#28a745"
-        btn_text_color = "white"
-        btn_hover = "#218838"
-        btn_label = "✅ Data Terupdate (Fresh)"
+    st.session_state['last_update'] = time.time()
 
     st.markdown(f"""
     <style>
     div[data-testid="stSidebar"] .stButton > button {{
-        background-color: {btn_bg} !important;
-        color: {btn_text_color} !important;
-        border: 1px solid {btn_bg} !important;
+        background-color: #28a745 !important;
+        color: white !important;
+        border: 1px solid #28a745 !important;
         font-weight: bold;
     }}
     div[data-testid="stSidebar"] .stButton > button:hover {{
-        background-color: {btn_hover} !important;
-        border: 1px solid {btn_hover} !important;
-        color: {btn_text_color} !important;
+        background-color: #218838 !important;
+        border: 1px solid #218838 !important;
+        color: white !important;
     }}
     </style>
     """, unsafe_allow_html=True)
@@ -287,7 +280,8 @@ if halaman == "🎯 Shock Dip Radar":
         help="Item dengan potensi untung per slot di bawah angka ini akan disaring dari Tabel 4 (Verified Shock Dips)."
     )
 
-    if st.sidebar.button(btn_label):
+    st.sidebar.caption("🔄 Auto-refresh aktif — data ambil ulang otomatis tiap 5 menit.")
+    if st.sidebar.button("🔄 Refresh Sekarang"):
         fetch_market_data.clear()
         st.session_state['last_update'] = time.time()
         st.rerun()
@@ -591,6 +585,29 @@ if halaman == "🎯 Shock Dip Radar":
                     c3.metric("📊 Volume vs Rata-rata", f"{rasio_vol:.1f}x", label_vol)
                 else:
                     c3.metric("📊 Volume vs Rata-rata", "N/A")
+
+                # --- Deteksi apakah dip SUDAH MULAI PULIH (supaya tidak kejebak beli kemahalan) ---
+                # Ambil titik harga TERENDAH dalam beberapa periode terakhir (window sama seperti
+                # MA), lalu cek seberapa jauh harga SEKARANG sudah naik dari titik itu. Ini pakai
+                # data yang sudah ke-fetch, tidak ada panggilan API tambahan.
+                window_recent = df_c.tail(6).reset_index(drop=True)
+                idx_min = window_recent['avgLowPrice'].idxmin()
+                titik_terendah = window_recent['avgLowPrice'].iloc[idx_min]
+                waktu_terendah = window_recent['Waktu'].iloc[idx_min]
+                waktu_sekarang = df_c['Waktu'].iloc[-1]
+                harga_sekarang = df_c['avgLowPrice'].iloc[-1]
+
+                if titik_terendah > 0:
+                    recovery_pct = (harga_sekarang - titik_terendah) / titik_terendah * 100
+                    menit_sejak_terendah = (waktu_sekarang - waktu_terendah).total_seconds() / 60
+                    waktu_label = f"{menit_sejak_terendah:.0f} menit lalu" if timestep_code == '5m' else f"{menit_sejak_terendah/60:.1f} jam lalu"
+
+                    if recovery_pct <= 0.3:
+                        st.success(f"🟢 **Masih di titik terendah** (tercatat {waktu_label}) — belum terlambat, harga belum naik berarti dari dasarnya.")
+                    elif recovery_pct <= 1.5:
+                        st.warning(f"🟡 **Sudah mulai pulih** — harga naik {recovery_pct:.1f}% dari titik terendah ({waktu_label}). Masih ada peluang, tapi jangan ditunda lagi.")
+                    else:
+                        st.error(f"🔴 **Kemungkinan sudah terlambat** — harga sudah naik {recovery_pct:.1f}% dari titik terendah ({waktu_label}). Dip ini kemungkinan sudah banyak diambil orang lain.")
 
                 l_low = alt.Chart(df_c).mark_line(color='#00a8ff', strokeWidth=2).encode(x=alt.X('Waktu:T', title='Waktu (WIB)'), y=alt.Y('avgLowPrice:Q', title='Harga (GP)', scale=alt.Scale(zero=False)))
                 l_high = alt.Chart(df_c).mark_line(color='#e84118', strokeWidth=2).encode(x='Waktu:T', y='avgHighPrice:Q')
