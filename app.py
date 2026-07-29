@@ -364,6 +364,28 @@ if halaman == "🎯 Shock Dip Radar":
                     return '🔴 Jangan Naikkan'
             df['Tanda_Ruang_Naik'] = df['Ruang_Naik_Persen'].apply(tanda_ruang)
 
+            # --- Deteksi lonjakan volume (pakai data yang sudah ke-fetch, tanpa API tambahan) ---
+            # Baseline = rata-rata volume PER JAM kalau volume harian dibagi rata 24 jam.
+            # Rasio = volume 1 jam TERAKHIR dibanding baseline itu. Rasio tinggi = banyak
+            # orang jual/beli bareng di jam ini dibanding jam biasa -- indikasi shock beneran,
+            # bukan cuma harga geser tipis karena pasar sepi.
+            df['Vol_Baseline_Perjam'] = df['D_VolLow'] / 24
+            df['Rasio_Volume'] = df.apply(
+                lambda r: (r['H_VolLow'] / r['Vol_Baseline_Perjam']) if r['Vol_Baseline_Perjam'] > 0 else None,
+                axis=1
+            )
+
+            def tanda_volume(rasio):
+                if rasio is None or pd.isna(rasio):
+                    return '❓ N/A'
+                elif rasio >= 2:
+                    return '🚀 Lonjakan!'
+                elif rasio >= 1.2:
+                    return '📈 Naik'
+                else:
+                    return '➖ Normal'
+            df['Tanda_Volume'] = df['Rasio_Volume'].apply(tanda_volume)
+
             return df
 
         # ==========================================
@@ -371,6 +393,11 @@ if halaman == "🎯 Shock Dip Radar":
         # ==========================================
         st.subheader("🔥 Tabel 1: Global — Anjlok Tajam (> 2%)")
         st.write("Semua barang (F2P & Member) di game yang sedang mengalami diskon besar dan menguntungkan:")
+        st.caption(
+            "📊 Kolom **Volume** = volume transaksi 1 jam terakhir dibanding rata-rata per jam "
+            "hari ini. 🚀 Lonjakan! (≥2x) = banyak orang jual/beli bareng, kemungkinan shock "
+            "beneran. ➖ Normal = volume biasa saja, harga turunnya bisa jadi cuma pasar sepi."
+        )
 
         df_f2p_2pct = master_data[
             (master_data['Live_Low'] > 0) & 
@@ -382,8 +409,8 @@ if halaman == "🎯 Shock Dip Radar":
         if not df_f2p_2pct.empty:
             df_f2p_2pct['Untung_Per_Biji'] = df_f2p_2pct['Hourly_Low'] - df_f2p_2pct['Live_Low'] - df_f2p_2pct['Tax']
             res_f2p1 = apply_safety_lock(df_f2p_2pct).sort_values(by='Total_Untung_Slot', ascending=False)
-            res_f2p1_display = res_f2p1.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga'})
-            st.dataframe(res_f2p1_display[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
+            res_f2p1_display = res_f2p1.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga', 'Tanda_Volume': 'Volume'})
+            st.dataframe(res_f2p1_display[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian', 'Volume']], use_container_width=True)
         else:
             res_f2p1 = pd.DataFrame()
             st.warning("⏳ Tidak ada item yang sedang anjlok > 2% saat ini.")
