@@ -221,6 +221,36 @@ if halaman == "🎯 Shock Dip Radar":
         return hasil
 
     # ==========================================
+    # CEK VOLUME GRANULAR (5 MENIT) PER ITEM
+    # Lebih presisi dari perkiraan kasar (1 jam vs rata-rata harian) karena
+    # membandingkan periode 5 menit TERAKHIR dengan rata-rata 6 periode 5 menit
+    # sebelumnya -- sama persis logikanya dengan indikator di Dual Chart.
+    # Trade-off: 1 panggilan API tambahan per item yang dicek.
+    # ==========================================
+    @st.cache_data(ttl=120)
+    def fetch_recent_volume_ratio(item_id):
+        headers = {'User-Agent': 'Belajar_Data_Analisis_Bot_Lokal'}
+        try:
+            url = f"https://prices.runescape.wiki/api/v1/osrs/timeseries?timestep=5m&id={item_id}"
+            resp = requests.get(url, headers=headers, timeout=10)
+            resp.raise_for_status()
+            data = resp.json().get('data', [])
+            if len(data) < 3:
+                return None
+            df_v = pd.DataFrame(data).tail(7)
+            for c in ['lowPriceVolume', 'highPriceVolume']:
+                if c in df_v.columns:
+                    df_v[c] = pd.to_numeric(df_v[c], errors='coerce').fillna(0)
+                else:
+                    df_v[c] = 0
+            df_v['Total_Vol'] = df_v['lowPriceVolume'] + df_v['highPriceVolume']
+            vol_now = df_v['Total_Vol'].iloc[-1]
+            vol_baseline = df_v['Total_Vol'].iloc[:-1].mean()
+            return (vol_now / vol_baseline) if vol_baseline > 0 else None
+        except Exception:
+            return None
+
+    # ==========================================
     # AUTO-REFRESH (5 MENIT) & TOMBOL REFRESH MANUAL
     # ==========================================
     st.session_state['last_update'] = time.time()
@@ -277,6 +307,14 @@ if halaman == "🎯 Shock Dip Radar":
     min_profit_total = st.sidebar.number_input(
         "Min. Profit Total per Slot (GP)", min_value=0, value=5000, step=1000,
         help="Item dengan potensi untung per slot di bawah angka ini akan disaring dari Tabel 4 (Verified Shock Dips)."
+    )
+
+    st.sidebar.header("📊 Cek Volume Granular (Tabel 1)")
+    vol_cek_limit = st.sidebar.number_input(
+        "Jumlah Item Dicek Volume Detail", min_value=0, max_value=50, value=20, step=5,
+        help="Tabel 1 akan mengecek volume 5-menit granular (1 API call per item) untuk N item "
+             "TERATAS (paling menguntungkan). Makin besar angkanya, makin akurat tapi makin lambat "
+             "scan-nya. Set ke 0 untuk mematikan fitur ini."
     )
 
     st.sidebar.caption("🔄 Auto-refresh aktif — data ambil ulang otomatis tiap 1 menit.")
@@ -364,28 +402,6 @@ if halaman == "🎯 Shock Dip Radar":
                     return '🔴 Jangan Naikkan'
             df['Tanda_Ruang_Naik'] = df['Ruang_Naik_Persen'].apply(tanda_ruang)
 
-            # --- Deteksi lonjakan volume (pakai data yang sudah ke-fetch, tanpa API tambahan) ---
-            # Baseline = rata-rata volume PER JAM kalau volume harian dibagi rata 24 jam.
-            # Rasio = volume 1 jam TERAKHIR dibanding baseline itu. Rasio tinggi = banyak
-            # orang jual/beli bareng di jam ini dibanding jam biasa -- indikasi shock beneran,
-            # bukan cuma harga geser tipis karena pasar sepi.
-            df['Vol_Baseline_Perjam'] = df['D_VolLow'] / 24
-            df['Rasio_Volume'] = df.apply(
-                lambda r: (r['H_VolLow'] / r['Vol_Baseline_Perjam']) if r['Vol_Baseline_Perjam'] > 0 else None,
-                axis=1
-            )
-
-            def tanda_volume(rasio):
-                if rasio is None or pd.isna(rasio):
-                    return '❓ N/A'
-                elif rasio >= 2:
-                    return '🚀 Lonjakan!'
-                elif rasio >= 1.2:
-                    return '📈 Naik'
-                else:
-                    return '➖ Normal'
-            df['Tanda_Volume'] = df['Rasio_Volume'].apply(tanda_volume)
-
             return df
 
         # ==========================================
@@ -394,9 +410,10 @@ if halaman == "🎯 Shock Dip Radar":
         st.subheader("🔥 Tabel 1: Global — Anjlok Tajam (> 2%)")
         st.write("Semua barang (F2P & Member) di game yang sedang mengalami diskon besar dan menguntungkan:")
         st.caption(
-            "📊 Kolom **Volume** = volume transaksi 1 jam terakhir dibanding rata-rata per jam "
-            "hari ini. 🚀 Lonjakan! (≥2x) = banyak orang jual/beli bareng, kemungkinan shock "
-            "beneran. ➖ Normal = volume biasa saja, harga turunnya bisa jadi cuma pasar sepi."
+            "📊 Kolom **Volume** = volume transaksi 5 menit TERAKHIR dibanding rata-rata 6 "
+            "periode 5-menit sebelumnya (data granular per item, bukan perkiraan kasar). "
+            "🚀 Lonjakan! (≥2x) = banyak orang jual/beli bareng, kemungkinan shock beneran. "
+            "⏳ Belum dicek = di luar batas N item teratas yang diatur di sidebar."
         )
 
         df_f2p_2pct = master_data[
@@ -409,6 +426,33 @@ if halaman == "🎯 Shock Dip Radar":
         if not df_f2p_2pct.empty:
             df_f2p_2pct['Untung_Per_Biji'] = df_f2p_2pct['Hourly_Low'] - df_f2p_2pct['Live_Low'] - df_f2p_2pct['Tax']
             res_f2p1 = apply_safety_lock(df_f2p_2pct).sort_values(by='Total_Untung_Slot', ascending=False)
+
+            # Cek volume granular (5 menit) untuk N item teratas -- lihat penjelasan
+            # fungsi fetch_recent_volume_ratio di atas soal trade-off API-nya.
+            n_cek = min(int(vol_cek_limit), len(res_f2p1))
+            rasio_granular = []
+            if n_cek > 0:
+                prog_vol1 = st.progress(0, text="Mengecek volume granular Tabel 1...")
+                for i, (_, row) in enumerate(res_f2p1.head(n_cek).iterrows()):
+                    rasio_granular.append(fetch_recent_volume_ratio(int(row['id'])))
+                    prog_vol1.progress((i + 1) / n_cek, text=f"Cek volume: {row['mappingname']} ({i + 1}/{n_cek})")
+                    time.sleep(0.12)
+                prog_vol1.empty()
+            rasio_granular += [None] * (len(res_f2p1) - n_cek)
+            res_f2p1 = res_f2p1.copy()
+            res_f2p1['Rasio_Volume_5m'] = rasio_granular
+
+            def tanda_volume_5m(rasio):
+                if rasio is None or pd.isna(rasio):
+                    return '⏳ Belum dicek'
+                elif rasio >= 2:
+                    return '🚀 Lonjakan!'
+                elif rasio >= 1.2:
+                    return '📈 Naik'
+                else:
+                    return '➖ Normal'
+            res_f2p1['Tanda_Volume'] = res_f2p1['Rasio_Volume_5m'].apply(tanda_volume_5m)
+
             res_f2p1_display = res_f2p1.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga', 'Tanda_Volume': 'Volume'})
             st.dataframe(res_f2p1_display[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian', 'Volume']], use_container_width=True)
         else:
