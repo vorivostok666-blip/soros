@@ -895,6 +895,22 @@ else:
             log_diagnostik.append({'Produk': nama_produk, 'Masalah': "Produk tidak ada data harga terkini — resep dilewati."})
             continue
 
+        # --- Volume JUAL produk (beda dari volume BAHAN yang dipakai buat batas beli) ---
+        # Ini pakai data 1 jam yang sudah ke-fetch (tidak ada API tambahan). Resep bisa
+        # untung di atas kertas tapi produknya jarang ada pembeli -- ini buat deteksi itu.
+        vol_low_p = product_ref['H_VolLow'] if pd.notna(product_ref.get('H_VolLow')) else 0
+        vol_high_p = product_ref['H_VolHigh'] if pd.notna(product_ref.get('H_VolHigh')) else 0
+        vol_produk_1h = vol_low_p + vol_high_p
+
+        if vol_produk_1h >= 100:
+            status_vol_produk = '🟢 Tinggi'
+        elif vol_produk_1h >= 10:
+            status_vol_produk = '🟡 Sedang'
+        elif vol_produk_1h >= 1:
+            status_vol_produk = '🟠 Rendah'
+        else:
+            status_vol_produk = '🔴 Sangat Rendah/Tidak Ada'
+
         # Pajak dihitung terpisah untuk skenario jual di Low vs High (lebih akurat
         # daripada memakai satu nilai pajak untuk keduanya)
         tax_low = calc_ge_tax(live_low)
@@ -920,6 +936,8 @@ else:
             'Untung/Eksekusi (High)': round(untung_high),
             'Maks Eksekusi (Likuiditas, 4 Jam)': int(maks_eksekusi_likuiditas) if maks_eksekusi_likuiditas is not None else None,
             'ROI (%)': round(roi_persen, 1),
+            'Volume Jual Produk (1 Jam)': round(vol_produk_1h),
+            'Status Volume Jual': status_vol_produk,
             '_ingredients': ingredient_detail,
             '_qty_produced': qty_produced,
         })
@@ -951,6 +969,10 @@ else:
     metode_tersedia = sorted(df_hasil['Metode'].unique().tolist()) if not df_hasil.empty else []
     metode_pilihan = st.sidebar.multiselect("Filter Kategori Resep", options=metode_tersedia, default=metode_tersedia)
     sembunyikan_modal_kurang = st.sidebar.checkbox("Sembunyikan resep yang modalnya kurang", value=False)
+    sembunyikan_vol_rendah = st.sidebar.checkbox(
+        "Sembunyikan produk dengan volume jual rendah/sangat rendah", value=False,
+        help="Buang resep yang produk jadinya (🟠 Rendah / 🔴 Sangat Rendah) jarang ada pembeli, meski marginnya kelihatan bagus."
+    )
 
     st.divider()
 
@@ -960,16 +982,21 @@ else:
         df_tampil = df_hasil[df_hasil['Metode'].isin(metode_pilihan)].copy()
         if sembunyikan_modal_kurang:
             df_tampil = df_tampil[df_tampil['Bisa Dijalankan?'] == '✅']
+        if sembunyikan_vol_rendah:
+            df_tampil = df_tampil[~df_tampil['Status Volume Jual'].isin(['🟠 Rendah', '🔴 Sangat Rendah/Tidak Ada'])]
         df_tampil = df_tampil.sort_values(by='Profit Realistis (High)', ascending=False)
 
         st.subheader(f"📋 {len(df_tampil)} Resep Menguntungkan Ditemukan")
         st.caption(
             "Diurutkan dari **Profit Realistis (High)** tertinggi — sudah memperhitungkan batas modal & "
             "likuiditas bahan, bukan cuma margin per unit. 'Untung/Eksekusi (Low/High)' = profit SEKALI proses "
-            "kalau produk terjual di harga Low (cepat) atau High (lebih untung, lebih lama)."
+            "kalau produk terjual di harga Low (cepat) atau High (lebih untung, lebih lama). Kolom "
+            "**Status Volume Jual** = seberapa aktif produk JADINYA diperdagangkan (🟢 Tinggi / 🟡 Sedang / "
+            "🟠 Rendah / 🔴 Sangat Rendah) — kalau rendah, hati-hati: hasil produksimu bisa numpuk lama "
+            "sebelum laku, meski marginnya kelihatan bagus di atas kertas."
         )
         st.dataframe(
-            df_tampil[['Produk', 'Metode', 'Syarat', 'Bisa Dijalankan?', 'Modal/Eksekusi',
+            df_tampil[['Produk', 'Metode', 'Syarat', 'Bisa Dijalankan?', 'Status Volume Jual', 'Modal/Eksekusi',
                        'Untung/Eksekusi (Low)', 'Untung/Eksekusi (High)', 'Maks Eksekusi Realistis',
                        'Profit Realistis (Low)', 'Profit Realistis (High)', 'ROI (%)']],
             use_container_width=True
@@ -987,10 +1014,11 @@ else:
             st.write(f"**Metode:** {baris['Metode']} · **Syarat:** {baris['Syarat']}")
             st.write(f"1 kali eksekusi menghasilkan **{baris['_qty_produced']:g}x {produk_pilihan}**, butuh bahan:")
             st.dataframe(pd.DataFrame(baris['_ingredients']), use_container_width=True)
-            c1, c2, c3 = st.columns(3)
+            c1, c2, c3, c4 = st.columns(4)
             c1.metric("Modal per Eksekusi", f"{baris['Modal/Eksekusi']:,.0f} GP")
             c2.metric("Maks Eksekusi Realistis", f"{baris['Maks Eksekusi Realistis']:,.0f}x")
             c3.metric("Profit Realistis (High)", f"{baris['Profit Realistis (High)']:,.0f} GP")
+            c4.metric("Volume Jual Produk", f"{baris['Volume Jual Produk (1 Jam)']:,.0f}/jam", baris['Status Volume Jual'])
         else:
             st.info("Tidak ada resep yang cocok dengan filter saat ini.")
 
