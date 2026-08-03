@@ -105,7 +105,7 @@ st.sidebar.divider()
 
 if halaman == "🎯 Shock Dip Radar":
     st.title("⭐ OSRS Global Flipping Radar")
-    st.write("Sinyal *trading* otomatis untuk **SEMUA ITEM OSRS (F2P & Member)** dengan 4 Radar Terpisah & Dual Chart.")
+    st.write("Sinyal *trading* otomatis untuk **SEMUA ITEM F2P OSRS** dengan 4 Radar Terpisah & Dual Chart.")
     st.caption(
         "ℹ️ Kolom **Maks Beli (BEP)** = batas harga beli tertinggi sebelum kamu balik modal (breakeven), "
         "dihitung dari Harga Jual dikurangi Pajak GE. Kalau kamu naikkan harga beli untuk mempercepat fill, "
@@ -115,7 +115,7 @@ if halaman == "🎯 Shock Dip Radar":
     st.caption("🏭 Mau lihat strategi lain? Buka halaman **Low-Effort Processing** di sidebar kiri untuk margin bahan mentah → barang jadi (Decanting, Voidwaker, Godsword, Torva, dll).")
 
     # ==========================================
-    # FUNGSI MENGAMBIL SEMUA ITEM DARI API WIKI (F2P + MEMBER)
+    # FUNGSI MENGAMBIL ITEM F2P DARI API WIKI
     # Catatan: fungsi fetch_mapping/fetch_1h/fetch_24h/fetch_latest sekarang
     # ada di common.py supaya bisa dipakai bareng dengan halaman lain
     # (Low-Effort Processing) tanpa duplikasi kode.
@@ -124,6 +124,7 @@ if halaman == "🎯 Shock Dip Radar":
     def fetch_market_data():
         try:
             df_map = fetch_mapping()
+            df_map = df_map[df_map['members'] == False]  # filter HANYA item F2P
             df_1h = fetch_1h()
             df_24h = fetch_24h()
             df_latest = fetch_latest()
@@ -135,8 +136,7 @@ if halaman == "🎯 Shock Dip Radar":
                 if col in master.columns:
                     master[col] = pd.to_numeric(master[col], errors='coerce').fillna(0)
 
-            # Hitung Pajak GE (2%, dibatasi maks 5 juta GP per item — penting sekarang
-            # karena item Member bisa bernilai ratusan juta GP)
+            # Hitung Pajak GE (2%, dibatasi maks 5 juta GP per item)
             master['Tax'] = master['Hourly_Low'].apply(calc_ge_tax)
             return master
         except Exception as e:
@@ -276,16 +276,16 @@ if halaman == "🎯 Shock Dip Radar":
     # ==========================================
     st.sidebar.header("⚙️ Pengaturan Modal GE")
     tipe_akun = st.sidebar.radio(
-        "Tipe Akun", options=["Member (8 Slot)", "F2P (3 Slot)"], index=0,
+        "Tipe Akun", options=["Member (8 Slot)", "F2P (3 Slot)"], index=1,
         help="Menentukan berapa banyak slot Grand Exchange aktif yang kamu punya untuk radar ini."
     )
     jumlah_slot = 8 if tipe_akun.startswith("Member") else 3
 
     total_modal = st.sidebar.number_input(
         "Masukkan Total Modal Anda (GP):", 
-        min_value=50000, 
-        value=1500000, 
-        step=100000,
+        min_value=500, 
+        value=3000, 
+        step=500,
         format="%d",
         help=f"Modal ini akan dibagi rata ke {jumlah_slot} slot aktif Grand Exchange."
     )
@@ -363,7 +363,7 @@ if halaman == "🎯 Shock Dip Radar":
         st.session_state['last_update'] = time.time()
         st.rerun()
 
-    with st.spinner('Memindai seluruh pasar OSRS (F2P & Member)...'):
+    with st.spinner('Memindai seluruh pasar F2P OSRS...'):
         master_data = fetch_market_data()
 
     if not master_data.empty:
@@ -408,7 +408,7 @@ if halaman == "🎯 Shock Dip Radar":
         # TABEL 1: SEMUA ITEM (ANJLOK > 2%)
         # ==========================================
         st.subheader("🔥 Tabel 1: Global — Anjlok Tajam (> 2%)")
-        st.write("Semua barang (F2P & Member) di game yang sedang mengalami diskon besar dan menguntungkan:")
+        st.write("Semua barang F2P di game yang sedang mengalami diskon besar dan menguntungkan:")
         st.caption(
             "📊 Kolom **Volume** = volume transaksi 5 menit TERAKHIR dibanding rata-rata 6 "
             "periode 5-menit sebelumnya (data granular per item, bukan perkiraan kasar). "
@@ -465,7 +465,7 @@ if halaman == "🎯 Shock Dip Radar":
         # TABEL 2: SEMUA ITEM (TURUN TIPIS 0.5% - 2%)
         # ==========================================
         st.subheader("⚡ Tabel 2: Global — Turun Tipis (0.5% - 2% / Main Cepat)")
-        st.write("Semua barang (F2P & Member) berliku cepat yang sedang turun tipis — cocok untuk *scalping* kilat:")
+        st.write("Semua barang F2P berliku cepat yang sedang turun tipis — cocok untuk *scalping* kilat:")
 
         df_f2p_05pct = master_data[
             (master_data['Live_Low'] > 0) & 
@@ -490,7 +490,7 @@ if halaman == "🎯 Shock Dip Radar":
         # TABEL 3: RADAR SULTAN & HIGH-MARGIN
         # ==========================================
         st.subheader("💎 Tabel 3: Global — Radar SULTAN & High-Margin")
-        st.write("Memindai seluruh item bernilai tinggi (F2P & Member) yang memberikan **Untung ≥ 15.000 GP/biji** ATAU **Anjlok Ekstrem (> 3%)**:")
+        st.write("Memindai seluruh item bernilai tinggi F2P yang memberikan **Untung ≥ 15.000 GP/biji** ATAU **Anjlok Ekstrem (> 3%)**:")
 
         master_data['Untung_Per_Biji'] = master_data['Hourly_Low'] - master_data['Live_Low'] - master_data['Tax']
         df_f2p_jackpot = master_data[
@@ -610,7 +610,7 @@ if halaman == "🎯 Shock Dip Radar":
         # DUAL CHART (SEMUA ITEM)
         # ==========================================
         st.header("📈 Dual Chart Analisis (Semua Item)")
-        st.write("Pilih barang apa saja dari seluruh item OSRS (F2P & Member) untuk melihat grafik 5m & 1h secara bersamaan.")
+        st.write("Pilih barang apa saja dari seluruh item F2P OSRS untuk melihat grafik 5m & 1h secara bersamaan.")
 
         daftar_item = master_data.sort_values(by='mappingname')[['id', 'mappingname']].drop_duplicates()
         pilihan_nama = st.selectbox("Pilih Barang:", daftar_item['mappingname'].tolist(), index=0)
