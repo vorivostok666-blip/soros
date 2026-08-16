@@ -118,6 +118,13 @@ if halaman == "🎯 Shock Dip Radar":
         "🟢 Aman Dinaikkan (≥2% dari Harga Beli) · 🟡 Pas-pasan (0.5%–2%) · 🔴 Jangan Naikkan (<0.5%, nyaris tidak ada ruang)."
     )
     st.caption("🏭 Mau lihat strategi lain? Buka halaman **Low-Effort Processing** di sidebar kiri untuk margin bahan mentah → barang jadi (Decanting, Voidwaker, Godsword, Torva, dll).")
+    st.caption(
+        "🔮 Kolom **Nilai High Alch** = GP tetap yang kamu dapat kalau item ini di-cast High Level "
+        "Alchemy (butuh Magic 55, spell ini bisa dipakai F2P). Kolom **Untung Alch** = Nilai High Alch "
+        "dikurangi Harga Beli dan harga 1 Nature rune saat ini (asumsi pakai Staff of Fire, jadi gak "
+        "kena biaya fire rune). Kalau Untung Alch positif, item ini punya 'jaring pengaman' — meski "
+        "gagal dijual di GE, kamu masih bisa alch buat balik modal atau untung."
+    )
 
     # ==========================================
     # FUNGSI MENGAMBIL ITEM F2P DARI API WIKI
@@ -168,6 +175,18 @@ if halaman == "🎯 Shock Dip Radar":
 
             # Hitung Pajak GE (2%, dibatasi maks 5 juta GP per item)
             master['Tax'] = master['Hourly_Low'].apply(calc_ge_tax)
+
+            # --- Nilai & Untung High Alch ---
+            # 'highalch' dari /mapping itu FIXED (bukan harga pasar) -- nilai GP yang
+            # kamu dapat kalau item ini di-cast High Level Alchemy (butuh Magic 55, F2P
+            # bisa pakai spell ini kok, cuma butuh level, bukan status member).
+            # Untung_Alch = Nilai_High_Alch - Harga_Beli - harga Nature rune (asumsi pakai
+            # Staff of Fire jadi gak kena biaya fire rune, cuma nature rune per cast).
+            master['Nilai_High_Alch'] = master['highalch']
+            harga_nr = df_latest.loc[df_latest['id'] == 561, 'Live_Low']
+            harga_nature_rune = float(harga_nr.values[0]) if len(harga_nr) > 0 and harga_nr.values[0] > 0 else 200.0
+            master['Untung_Alch'] = master['Nilai_High_Alch'] - master['Live_Low'] - harga_nature_rune
+
             return master
         except Exception as e:
             st.error(f"Gagal mengambil data API: {e}")
@@ -485,8 +504,8 @@ if halaman == "🎯 Shock Dip Radar":
                     return '➖ Normal'
             res_f2p1['Tanda_Volume'] = res_f2p1['Rasio_Volume_5m'].apply(tanda_volume_5m)
 
-            res_f2p1_display = res_f2p1.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga', 'Tanda_Volume': 'Volume'})
-            st.dataframe(res_f2p1_display[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian', 'Volume']], use_container_width=True)
+            res_f2p1_display = res_f2p1.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga', 'Tanda_Volume': 'Volume', 'Nilai_High_Alch': 'Nilai High Alch', 'Untung_Alch': 'Untung Alch'})
+            st.dataframe(res_f2p1_display[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian', 'Volume', 'Nilai High Alch', 'Untung Alch']], use_container_width=True)
         else:
             res_f2p1 = pd.DataFrame()
             st.warning("⏳ Tidak ada item yang sedang anjlok > 2% saat ini.")
@@ -510,8 +529,8 @@ if halaman == "🎯 Shock Dip Radar":
         if not df_f2p_05pct.empty:
             df_f2p_05pct['Untung_Per_Biji'] = df_f2p_05pct['Hourly_Low'] - df_f2p_05pct['Live_Low'] - df_f2p_05pct['Tax']
             res_f2p2 = apply_safety_lock(df_f2p_05pct).sort_values(by='Total_Untung_Slot', ascending=False)
-            res_f2p2_display = res_f2p2.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga'})
-            st.dataframe(res_f2p2_display[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
+            res_f2p2_display = res_f2p2.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga', 'Nilai_High_Alch': 'Nilai High Alch', 'Untung_Alch': 'Untung Alch'})
+            st.dataframe(res_f2p2_display[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian', 'Nilai High Alch', 'Untung Alch']], use_container_width=True)
         else:
             res_f2p2 = pd.DataFrame()
             st.info("💡 Tidak ada item yang sedang turun tipis (0.5%-2%) saat ini.")
@@ -536,9 +555,9 @@ if halaman == "🎯 Shock Dip Radar":
 
         if not df_f2p_jackpot.empty:
             res_f2p_jack = apply_safety_lock(df_f2p_jackpot).sort_values(by='Total_Untung_Slot', ascending=False)
-            res_f2p_jack = res_f2p_jack.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga'})
+            res_f2p_jack = res_f2p_jack.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga', 'Nilai_High_Alch': 'Nilai High Alch', 'Untung_Alch': 'Untung Alch'})
             st.success("🚨 ADA PELUANG SULTAN YANG WORTH-IT!")
-            st.dataframe(res_f2p_jack[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
+            st.dataframe(res_f2p_jack[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian', 'Nilai High Alch', 'Untung Alch']], use_container_width=True)
         else:
             st.info("💡 Sedang tidak ada barang Sultan ber-margin besar saat ini.")
 
@@ -613,11 +632,12 @@ if halaman == "🎯 Shock Dip Radar":
                         'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual',
                         'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung',
                         'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian',
-                        'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga'
+                        'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga',
+                        'Nilai_High_Alch': 'Nilai High Alch', 'Untung_Alch': 'Untung Alch'
                     })
                     st.success(f"✅ {len(df_verified)} item lolos verifikasi shock dip historis!")
                     st.dataframe(
-                        df_verified[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']],
+                        df_verified[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian', 'Nilai High Alch', 'Untung Alch']],
                         use_container_width=True
                     )
                 else:
@@ -666,10 +686,11 @@ if halaman == "🎯 Shock Dip Radar":
             res_spread_display = res_spread.rename(columns={
                 'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Live_High': 'Harga Jual',
                 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)',
-                'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga'
+                'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga',
+                'Nilai_High_Alch': 'Nilai High Alch', 'Untung_Alch': 'Untung Alch'
             })
             st.dataframe(
-                res_spread_display[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']],
+                res_spread_display[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian', 'Nilai High Alch', 'Untung Alch']],
                 use_container_width=True
             )
         else:
