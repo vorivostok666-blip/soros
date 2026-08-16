@@ -27,12 +27,17 @@ BASE_URL = 'https://prices.runescape.wiki/api/v1/osrs'
 
 @st.cache_data(ttl=3600)
 def fetch_mapping():
-    """Mapping SEMUA item OSRS: id, nama, limit beli per 4 jam, status member."""
+    """Mapping SEMUA item OSRS: id, nama, limit beli per 4 jam, status member, nilai high alch."""
     req = requests.get(f'{BASE_URL}/mapping', headers=HEADERS)
-    df = pd.DataFrame(req.json())[['id', 'name', 'limit', 'members']]
+    df = pd.DataFrame(req.json())
+    for col in ['id', 'name', 'limit', 'members', 'highalch']:
+        if col not in df.columns:
+            df[col] = None
+    df = df[['id', 'name', 'limit', 'members', 'highalch']]
     df.rename(columns={'name': 'mappingname', 'limit': 'mappinglimit'}, inplace=True)
     df['id'] = pd.to_numeric(df['id'], errors='coerce').fillna(0).astype(int)
     df['mappinglimit'] = pd.to_numeric(df['mappinglimit'], errors='coerce').fillna(0)
+    df['highalch'] = pd.to_numeric(df['highalch'], errors='coerce').fillna(0)
     df['Tipe'] = df['members'].apply(lambda m: '👑 Member' if m else '🆓 F2P')
     return df
 
@@ -105,7 +110,7 @@ st.sidebar.divider()
 
 if halaman == "🎯 Shock Dip Radar":
     st.title("⭐ OSRS Global Flipping Radar")
-    st.write("Sinyal *trading* otomatis untuk **SEMUA ITEM F2P OSRS** dengan 4 Radar Terpisah & Dual Chart.")
+    st.write("Sinyal *trading* otomatis untuk **item High Alch & bahan/hasil Crafting F2P** dengan 5 Radar Terpisah & Dual Chart.")
     st.caption(
         "ℹ️ Kolom **Maks Beli (BEP)** = batas harga beli tertinggi sebelum kamu balik modal (breakeven), "
         "dihitung dari Harga Jual dikurangi Pajak GE. Kalau kamu naikkan harga beli untuk mempercepat fill, "
@@ -120,11 +125,36 @@ if halaman == "🎯 Shock Dip Radar":
     # ada di common.py supaya bisa dipakai bareng dengan halaman lain
     # (Low-Effort Processing) tanpa duplikasi kode.
     # ==========================================
+    # Daftar item mentah/hasil crafting F2P yang selalu diikutkan meski nilai
+    # High Alch-nya kecil/tidak ada (karena tetap relevan buat strategi crafting flip)
+    DAFTAR_ITEM_KHUSUS = {
+        # Diminta eksplisit
+        'Soft clay', 'Coal', 'Gold bar', 'Emerald',
+        # Bahan mentah smithing/crafting F2P umum
+        'Clay', 'Copper ore', 'Tin ore', 'Iron ore', 'Silver ore', 'Gold ore', 'Mithril ore', 'Adamantite ore',
+        'Bronze bar', 'Iron bar', 'Steel bar', 'Silver bar', 'Mithril bar', 'Adamantite bar',
+        'Cowhide', 'Leather', 'Hard leather',
+        'Flax', 'Bow string', 'Wool', 'Ball of wool',
+        # Gem mentah & sudah dipotong
+        'Uncut sapphire', 'Uncut emerald', 'Uncut ruby', 'Uncut diamond', 'Sapphire', 'Ruby', 'Diamond',
+        # Hasil jewelry crafting
+        'Gold ring', 'Sapphire ring', 'Emerald ring', 'Ruby ring', 'Diamond ring',
+        'Gold necklace', 'Sapphire necklace', 'Emerald necklace', 'Ruby necklace', 'Diamond necklace',
+        'Gold amulet (unstrung)', 'Ring mould', 'Necklace mould', 'Amulet mould',
+        # Hasil leather crafting
+        'Leather gloves', 'Leather boots', 'Leather cowl', 'Leather vambraces', 'Leather body', 'Leather chaps',
+        # Hasil pottery
+        'Bowl', 'Pot', 'Pie dish', 'Empty pot', 'Empty jug',
+    }
+
     @st.cache_data(ttl=60)
     def fetch_market_data():
         try:
             df_map = fetch_mapping()
             df_map = df_map[df_map['members'] == False]  # filter HANYA item F2P
+            # Persempit lagi: item yang bisa di-High Alch (nilai >= 50gp) ATAU
+            # ada di daftar bahan/hasil crafting F2P di atas -- bukan lagi SEMUA item F2P.
+            df_map = df_map[(df_map['highalch'] >= 50) | (df_map['mappingname'].isin(DAFTAR_ITEM_KHUSUS))]
             df_1h = fetch_1h()
             df_24h = fetch_24h()
             df_latest = fetch_latest()
@@ -363,12 +393,12 @@ if halaman == "🎯 Shock Dip Radar":
         st.session_state['last_update'] = time.time()
         st.rerun()
 
-    with st.spinner('Memindai seluruh pasar F2P OSRS...'):
+    with st.spinner('Memindai item High Alch & bahan Crafting F2P...'):
         master_data = fetch_market_data()
 
     if not master_data.empty:
     
-        def apply_safety_lock(df):
+        def apply_safety_lock(df, kolom_jual='Hourly_Low'):
             def safe_calc_qty(row):
                 price = row['Live_Low']
                 limit = row['mappinglimit']
@@ -390,7 +420,9 @@ if halaman == "🎯 Shock Dip Radar":
             # jangan sampai melewati titik breakeven ini: Harga Jual - Pajak.
             # Di atas angka ini, order tetap akan laku tapi kamu justru RUGI walau
             # sudah kena pajak GE (pajak dipotong dari sisi JUAL, bukan ditambah ke beli).
-            df['Batas_Beli_Maks'] = df['Hourly_Low'] - df['Tax']
+            # kolom_jual bisa diganti (misal 'Live_High' buat Tabel Spread) tergantung
+            # tabel mana yang pakai fungsi ini.
+            df['Batas_Beli_Maks'] = df[kolom_jual] - df['Tax']
             df['Ruang_Naik_Persen'] = ((df['Batas_Beli_Maks'] - df['Live_Low']) / df['Live_Low']) * 100
 
             def tanda_ruang(pct):
@@ -408,7 +440,7 @@ if halaman == "🎯 Shock Dip Radar":
         # TABEL 1: SEMUA ITEM (ANJLOK > 2%)
         # ==========================================
         st.subheader("🔥 Tabel 1: Global — Anjlok Tajam (> 2%)")
-        st.write("Semua barang F2P di game yang sedang mengalami diskon besar dan menguntungkan:")
+        st.write("Item High Alch/Crafting F2P yang sedang mengalami diskon besar dan menguntungkan:")
         st.caption(
             "📊 Kolom **Volume** = volume transaksi 5 menit TERAKHIR dibanding rata-rata 6 "
             "periode 5-menit sebelumnya (data granular per item, bukan perkiraan kasar). "
@@ -465,7 +497,7 @@ if halaman == "🎯 Shock Dip Radar":
         # TABEL 2: SEMUA ITEM (TURUN TIPIS 0.5% - 2%)
         # ==========================================
         st.subheader("⚡ Tabel 2: Global — Turun Tipis (0.5% - 2% / Main Cepat)")
-        st.write("Semua barang F2P berliku cepat yang sedang turun tipis — cocok untuk *scalping* kilat:")
+        st.write("Item High Alch/Crafting F2P berliku cepat yang sedang turun tipis — cocok untuk *scalping* kilat:")
 
         df_f2p_05pct = master_data[
             (master_data['Live_Low'] > 0) & 
@@ -490,7 +522,7 @@ if halaman == "🎯 Shock Dip Radar":
         # TABEL 3: RADAR SULTAN & HIGH-MARGIN
         # ==========================================
         st.subheader("💎 Tabel 3: Global — Radar SULTAN & High-Margin")
-        st.write("Memindai seluruh item bernilai tinggi F2P yang memberikan **Untung ≥ 15.000 GP/biji** ATAU **Anjlok Ekstrem (> 3%)**:")
+        st.write("Item High Alch/Crafting F2P bernilai tinggi yang memberikan **Untung ≥ 15.000 GP/biji** ATAU **Anjlok Ekstrem (> 3%)**:")
 
         master_data['Untung_Per_Biji'] = master_data['Hourly_Low'] - master_data['Live_Low'] - master_data['Tax']
         df_f2p_jackpot = master_data[
@@ -607,10 +639,49 @@ if halaman == "🎯 Shock Dip Radar":
         st.divider()
 
         # ==========================================
+        # TABEL 5: METODE HIGH-LOW SPREAD
+        # Beda dari Tabel 1-4 (yang berbasis DIP/histori harga), tabel ini murni
+        # lihat selisih harga SEKARANG: beli di Live_Low (insta-sell price),
+        # jual di Live_High (insta-buy price). Cocok buat item yang order book-nya
+        # emang lebar terus (bukan cuma pas lagi shock), khas item High Alch &
+        # bahan crafting yang di sini jadi fokus scan-nya.
+        # ==========================================
+        st.subheader("↔️ Tabel 5: Metode High-Low Spread")
+        st.write(
+            "Beda dari Tabel 1-4 (berbasis histori/dip), tabel ini murni bandingin **selisih harga saat ini** "
+            "— beli di harga Low, langsung jual di harga High. Cocok buat item yang memang selalu punya celah "
+            "harga lebar (bukan cuma pas lagi anjlok mendadak)."
+        )
+
+        df_spread = master_data[
+            (master_data['Live_Low'] > 0) &
+            (master_data['Live_High'] > 0)
+        ].copy()
+        df_spread['Tax_Spread'] = df_spread['Live_High'].apply(calc_ge_tax)
+        df_spread['Untung_Per_Biji'] = df_spread['Live_High'] - df_spread['Live_Low'] - df_spread['Tax_Spread']
+        df_spread = df_spread[df_spread['Untung_Per_Biji'] > 0]
+
+        if not df_spread.empty:
+            res_spread = apply_safety_lock(df_spread, kolom_jual='Live_High').sort_values(by='Total_Untung_Slot', ascending=False)
+            res_spread_display = res_spread.rename(columns={
+                'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Live_High': 'Harga Jual',
+                'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)',
+                'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga'
+            })
+            st.dataframe(
+                res_spread_display[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']],
+                use_container_width=True
+            )
+        else:
+            st.info("💡 Tidak ada item dengan celah High-Low Spread yang menguntungkan saat ini.")
+
+        st.divider()
+
+        # ==========================================
         # DUAL CHART (SEMUA ITEM)
         # ==========================================
         st.header("📈 Dual Chart Analisis (Semua Item)")
-        st.write("Pilih barang apa saja dari seluruh item F2P OSRS untuk melihat grafik 5m & 1h secara bersamaan.")
+        st.write("Pilih barang apa saja dari item High Alch/Crafting F2P untuk melihat grafik 5m & 1h secara bersamaan.")
 
         daftar_item = master_data.sort_values(by='mappingname')[['id', 'mappingname']].drop_duplicates()
         pilihan_nama = st.selectbox("Pilih Barang:", daftar_item['mappingname'].tolist(), index=0)
