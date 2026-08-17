@@ -186,6 +186,7 @@ if halaman == "🎯 Shock Dip Radar":
             harga_nr = df_latest.loc[df_latest['id'] == 561, 'Live_Low']
             harga_nature_rune = float(harga_nr.values[0]) if len(harga_nr) > 0 and harga_nr.values[0] > 0 else 200.0
             master['Untung_Alch'] = master['Nilai_High_Alch'] - master['Live_Low'] - harga_nature_rune
+            master['Harga_Nature_Rune'] = harga_nature_rune
 
             return master
         except Exception as e:
@@ -659,42 +660,57 @@ if halaman == "🎯 Shock Dip Radar":
         st.divider()
 
         # ==========================================
-        # TABEL 5: METODE HIGH-LOW SPREAD
-        # Beda dari Tabel 1-4 (yang berbasis DIP/histori harga), tabel ini murni
-        # lihat selisih harga SEKARANG: beli di Live_Low (insta-sell price),
-        # jual di Live_High (insta-buy price). Cocok buat item yang order book-nya
-        # emang lebar terus (bukan cuma pas lagi shock), khas item High Alch &
-        # bahan crafting yang di sini jadi fokus scan-nya.
+        # TABEL 5: METODE HIGH ALCH (BELI -> ALCH, BUKAN JUAL GE)
+        # Beda dari Tabel 1-4 (exit-nya jual di GE), tabel ini exit-nya CAST High
+        # Level Alchemy -- jadi Harga Jual GE gak relevan lagi, yang dipakai malah
+        # Nilai High Alch (fixed) dikurangi harga Nature rune. Jml Beli sengaja pakai
+        # limit beli resmi GE per 4 jam, TIDAK dibatasi modal/volume harian lagi.
         # ==========================================
-        st.subheader("↔️ Tabel 5: Metode High-Low Spread")
+        st.subheader("🔮 Tabel 5: Metode High Alch (Beli → Alch)")
         st.write(
-            "Beda dari Tabel 1-4 (berbasis histori/dip), tabel ini murni bandingin **selisih harga saat ini** "
-            "— beli di harga Low, langsung jual di harga High. Cocok buat item yang memang selalu punya celah "
-            "harga lebar (bukan cuma pas lagi anjlok mendadak)."
+            "Item dibeli dengan tujuan **di-High Level Alchemy**, bukan dijual balik di GE — jadi "
+            "Harga Jual GE gak relevan di sini. **Jml Beli** dihitung dari batas beli resmi GE per "
+            "4 jam saja (bukan dibatasi modal per slot atau volume harian seperti tabel lain)."
         )
 
-        df_spread = master_data[
+        df_alch = master_data[
             (master_data['Live_Low'] > 0) &
-            (master_data['Live_High'] > 0)
+            (master_data['Untung_Alch'] > 0) &
+            (master_data['mappinglimit'] > 0)
         ].copy()
-        df_spread['Tax_Spread'] = df_spread['Live_High'].apply(calc_ge_tax)
-        df_spread['Untung_Per_Biji'] = df_spread['Live_High'] - df_spread['Live_Low'] - df_spread['Tax_Spread']
-        df_spread = df_spread[df_spread['Untung_Per_Biji'] > 0]
 
-        if not df_spread.empty:
-            res_spread = apply_safety_lock(df_spread, kolom_jual='Live_High').sort_values(by='Total_Untung_Slot', ascending=False)
-            res_spread_display = res_spread.rename(columns={
-                'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Live_High': 'Harga Jual',
-                'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)',
-                'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga',
-                'Nilai_High_Alch': 'Nilai High Alch', 'Untung_Alch': 'Untung Alch'
+        if not df_alch.empty:
+            df_alch['Jml_Beli_Alch'] = df_alch['mappinglimit'].astype(int)
+            df_alch['Total_Untung_Alch'] = df_alch['Untung_Alch'] * df_alch['Jml_Beli_Alch']
+            df_alch['ROI_Alch_Persen'] = (df_alch['Untung_Alch'] / df_alch['Live_Low']) * 100
+            df_alch['Maks_Beli_Alch'] = df_alch['Nilai_High_Alch'] - df_alch['Harga_Nature_Rune']
+
+            def tanda_ruang_alch(row):
+                pct = ((row['Maks_Beli_Alch'] - row['Live_Low']) / row['Live_Low']) * 100
+                if pct >= 2:
+                    return '🟢 Aman Dinaikkan'
+                elif pct >= 0.5:
+                    return '🟡 Pas-pasan'
+                else:
+                    return '🔴 Jangan Naikkan'
+            df_alch['Status_Alch'] = df_alch.apply(tanda_ruang_alch, axis=1)
+
+            df_alch = df_alch.sort_values(by='Total_Untung_Alch', ascending=False)
+
+            df_alch_display = df_alch.rename(columns={
+                'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Jml_Beli_Alch': 'Jml Beli',
+                'Harga_Nature_Rune': 'Harga Nature Rune', 'Nilai_High_Alch': 'Nilai High Alch',
+                'Untung_Alch': 'Untung Alch/Biji', 'Total_Untung_Alch': 'Total Untung Alch',
+                'ROI_Alch_Persen': 'ROI (%)', 'Maks_Beli_Alch': 'Maks Beli (BEP)', 'Status_Alch': 'Status Harga'
             })
             st.dataframe(
-                res_spread_display[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian', 'Nilai High Alch', 'Untung Alch']],
+                df_alch_display[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga',
+                                  'Jml Beli', 'Harga Nature Rune', 'Nilai High Alch', 'Untung Alch/Biji',
+                                  'Total Untung Alch', 'ROI (%)']],
                 use_container_width=True
             )
         else:
-            st.info("💡 Tidak ada item dengan celah High-Low Spread yang menguntungkan saat ini.")
+            st.info("💡 Tidak ada item dengan untung High Alch positif saat ini.")
 
         st.divider()
 
