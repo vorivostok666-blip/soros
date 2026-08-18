@@ -27,17 +27,12 @@ BASE_URL = 'https://prices.runescape.wiki/api/v1/osrs'
 
 @st.cache_data(ttl=3600)
 def fetch_mapping():
-    """Mapping SEMUA item OSRS: id, nama, limit beli per 4 jam, status member, nilai high alch."""
+    """Mapping SEMUA item OSRS: id, nama, limit beli per 4 jam, status member."""
     req = requests.get(f'{BASE_URL}/mapping', headers=HEADERS)
-    df = pd.DataFrame(req.json())
-    for col in ['id', 'name', 'limit', 'members', 'highalch']:
-        if col not in df.columns:
-            df[col] = None
-    df = df[['id', 'name', 'limit', 'members', 'highalch']]
+    df = pd.DataFrame(req.json())[['id', 'name', 'limit', 'members']]
     df.rename(columns={'name': 'mappingname', 'limit': 'mappinglimit'}, inplace=True)
     df['id'] = pd.to_numeric(df['id'], errors='coerce').fillna(0).astype(int)
     df['mappinglimit'] = pd.to_numeric(df['mappinglimit'], errors='coerce').fillna(0)
-    df['highalch'] = pd.to_numeric(df['highalch'], errors='coerce').fillna(0)
     df['Tipe'] = df['members'].apply(lambda m: '👑 Member' if m else '🆓 F2P')
     return df
 
@@ -110,7 +105,7 @@ st.sidebar.divider()
 
 if halaman == "🎯 Shock Dip Radar":
     st.title("⭐ OSRS Global Flipping Radar")
-    st.write("Sinyal *trading* otomatis untuk **item High Alch & bahan/hasil Crafting F2P** dengan 5 Radar Terpisah & Dual Chart.")
+    st.write("Sinyal *trading* otomatis untuk **SEMUA ITEM OSRS (F2P & Member)** dengan 4 Radar Terpisah & Dual Chart.")
     st.caption(
         "ℹ️ Kolom **Maks Beli (BEP)** = batas harga beli tertinggi sebelum kamu balik modal (breakeven), "
         "dihitung dari Harga Jual dikurangi Pajak GE. Kalau kamu naikkan harga beli untuk mempercepat fill, "
@@ -118,50 +113,17 @@ if halaman == "🎯 Shock Dip Radar":
         "🟢 Aman Dinaikkan (≥2% dari Harga Beli) · 🟡 Pas-pasan (0.5%–2%) · 🔴 Jangan Naikkan (<0.5%, nyaris tidak ada ruang)."
     )
     st.caption("🏭 Mau lihat strategi lain? Buka halaman **Low-Effort Processing** di sidebar kiri untuk margin bahan mentah → barang jadi (Decanting, Voidwaker, Godsword, Torva, dll).")
-    st.caption(
-        "🔮 Kolom **Nilai High Alch** = GP tetap yang kamu dapat kalau item ini di-cast High Level "
-        "Alchemy (butuh Magic 55, spell ini bisa dipakai F2P). Kolom **Untung Alch** = Nilai High Alch "
-        "dikurangi Harga Beli dan harga 1 Nature rune saat ini (asumsi pakai Staff of Fire, jadi gak "
-        "kena biaya fire rune). Kalau Untung Alch positif, item ini punya 'jaring pengaman' — meski "
-        "gagal dijual di GE, kamu masih bisa alch buat balik modal atau untung."
-    )
 
     # ==========================================
-    # FUNGSI MENGAMBIL ITEM F2P DARI API WIKI
+    # FUNGSI MENGAMBIL SEMUA ITEM DARI API WIKI (F2P + MEMBER)
     # Catatan: fungsi fetch_mapping/fetch_1h/fetch_24h/fetch_latest sekarang
     # ada di common.py supaya bisa dipakai bareng dengan halaman lain
     # (Low-Effort Processing) tanpa duplikasi kode.
     # ==========================================
-    # Daftar item mentah/hasil crafting F2P yang selalu diikutkan meski nilai
-    # High Alch-nya kecil/tidak ada (karena tetap relevan buat strategi crafting flip)
-    DAFTAR_ITEM_KHUSUS = {
-        # Diminta eksplisit
-        'Soft clay', 'Coal', 'Gold bar', 'Emerald',
-        # Bahan mentah smithing/crafting F2P umum
-        'Clay', 'Copper ore', 'Tin ore', 'Iron ore', 'Silver ore', 'Gold ore', 'Mithril ore', 'Adamantite ore',
-        'Bronze bar', 'Iron bar', 'Steel bar', 'Silver bar', 'Mithril bar', 'Adamantite bar',
-        'Cowhide', 'Leather', 'Hard leather',
-        'Flax', 'Bow string', 'Wool', 'Ball of wool',
-        # Gem mentah & sudah dipotong
-        'Uncut sapphire', 'Uncut emerald', 'Uncut ruby', 'Uncut diamond', 'Sapphire', 'Ruby', 'Diamond',
-        # Hasil jewelry crafting
-        'Gold ring', 'Sapphire ring', 'Emerald ring', 'Ruby ring', 'Diamond ring',
-        'Gold necklace', 'Sapphire necklace', 'Emerald necklace', 'Ruby necklace', 'Diamond necklace',
-        'Gold amulet (unstrung)', 'Ring mould', 'Necklace mould', 'Amulet mould',
-        # Hasil leather crafting
-        'Leather gloves', 'Leather boots', 'Leather cowl', 'Leather vambraces', 'Leather body', 'Leather chaps',
-        # Hasil pottery
-        'Bowl', 'Pot', 'Pie dish', 'Empty pot', 'Empty jug',
-    }
-
     @st.cache_data(ttl=60)
     def fetch_market_data():
         try:
             df_map = fetch_mapping()
-            df_map = df_map[df_map['members'] == False]  # filter HANYA item F2P
-            # Persempit lagi: item yang bisa di-High Alch (nilai >= 50gp) ATAU
-            # ada di daftar bahan/hasil crafting F2P di atas -- bukan lagi SEMUA item F2P.
-            df_map = df_map[(df_map['highalch'] >= 50) | (df_map['mappingname'].isin(DAFTAR_ITEM_KHUSUS))]
             df_1h = fetch_1h()
             df_24h = fetch_24h()
             df_latest = fetch_latest()
@@ -173,21 +135,9 @@ if halaman == "🎯 Shock Dip Radar":
                 if col in master.columns:
                     master[col] = pd.to_numeric(master[col], errors='coerce').fillna(0)
 
-            # Hitung Pajak GE (2%, dibatasi maks 5 juta GP per item)
+            # Hitung Pajak GE (2%, dibatasi maks 5 juta GP per item — penting sekarang
+            # karena item Member bisa bernilai ratusan juta GP)
             master['Tax'] = master['Hourly_Low'].apply(calc_ge_tax)
-
-            # --- Nilai & Untung High Alch ---
-            # 'highalch' dari /mapping itu FIXED (bukan harga pasar) -- nilai GP yang
-            # kamu dapat kalau item ini di-cast High Level Alchemy (butuh Magic 55, F2P
-            # bisa pakai spell ini kok, cuma butuh level, bukan status member).
-            # Untung_Alch = Nilai_High_Alch - Harga_Beli - harga Nature rune (asumsi pakai
-            # Staff of Fire jadi gak kena biaya fire rune, cuma nature rune per cast).
-            master['Nilai_High_Alch'] = master['highalch']
-            harga_nr = df_latest.loc[df_latest['id'] == 561, 'Live_Low']
-            harga_nature_rune = float(harga_nr.values[0]) if len(harga_nr) > 0 and harga_nr.values[0] > 0 else 200.0
-            master['Untung_Alch'] = master['Nilai_High_Alch'] - master['Live_Low'] - harga_nature_rune
-            master['Harga_Nature_Rune'] = harga_nature_rune
-
             return master
         except Exception as e:
             st.error(f"Gagal mengambil data API: {e}")
@@ -271,36 +221,6 @@ if halaman == "🎯 Shock Dip Radar":
         return hasil
 
     # ==========================================
-    # CEK VOLUME GRANULAR (5 MENIT) PER ITEM
-    # Lebih presisi dari perkiraan kasar (1 jam vs rata-rata harian) karena
-    # membandingkan periode 5 menit TERAKHIR dengan rata-rata 6 periode 5 menit
-    # sebelumnya -- sama persis logikanya dengan indikator di Dual Chart.
-    # Trade-off: 1 panggilan API tambahan per item yang dicek.
-    # ==========================================
-    @st.cache_data(ttl=120)
-    def fetch_recent_volume_ratio(item_id):
-        headers = {'User-Agent': 'Belajar_Data_Analisis_Bot_Lokal'}
-        try:
-            url = f"https://prices.runescape.wiki/api/v1/osrs/timeseries?timestep=5m&id={item_id}"
-            resp = requests.get(url, headers=headers, timeout=10)
-            resp.raise_for_status()
-            data = resp.json().get('data', [])
-            if len(data) < 3:
-                return None
-            df_v = pd.DataFrame(data).tail(7)
-            for c in ['lowPriceVolume', 'highPriceVolume']:
-                if c in df_v.columns:
-                    df_v[c] = pd.to_numeric(df_v[c], errors='coerce').fillna(0)
-                else:
-                    df_v[c] = 0
-            df_v['Total_Vol'] = df_v['lowPriceVolume'] + df_v['highPriceVolume']
-            vol_now = df_v['Total_Vol'].iloc[-1]
-            vol_baseline = df_v['Total_Vol'].iloc[:-1].mean()
-            return (vol_now / vol_baseline) if vol_baseline > 0 else None
-        except Exception:
-            return None
-
-    # ==========================================
     # AUTO-REFRESH (5 MENIT) & TOMBOL REFRESH MANUAL
     # ==========================================
     st.session_state['last_update'] = time.time()
@@ -326,16 +246,16 @@ if halaman == "🎯 Shock Dip Radar":
     # ==========================================
     st.sidebar.header("⚙️ Pengaturan Modal GE")
     tipe_akun = st.sidebar.radio(
-        "Tipe Akun", options=["Member (8 Slot)", "F2P (3 Slot)"], index=1,
+        "Tipe Akun", options=["Member (8 Slot)", "F2P (3 Slot)"], index=0,
         help="Menentukan berapa banyak slot Grand Exchange aktif yang kamu punya untuk radar ini."
     )
     jumlah_slot = 8 if tipe_akun.startswith("Member") else 3
 
     total_modal = st.sidebar.number_input(
         "Masukkan Total Modal Anda (GP):", 
-        min_value=500, 
-        value=3000, 
-        step=500,
+        min_value=50000, 
+        value=1500000, 
+        step=100000,
         format="%d",
         help=f"Modal ini akan dibagi rata ke {jumlah_slot} slot aktif Grand Exchange."
     )
@@ -357,14 +277,6 @@ if halaman == "🎯 Shock Dip Radar":
     min_profit_total = st.sidebar.number_input(
         "Min. Profit Total per Slot (GP)", min_value=0, value=5000, step=1000,
         help="Item dengan potensi untung per slot di bawah angka ini akan disaring dari Tabel 4 (Verified Shock Dips)."
-    )
-
-    st.sidebar.header("📊 Cek Volume Granular (Tabel 1)")
-    vol_cek_limit = st.sidebar.number_input(
-        "Jumlah Item Dicek Volume Detail", min_value=0, max_value=50, value=20, step=5,
-        help="Tabel 1 akan mengecek volume 5-menit granular (1 API call per item) untuk N item "
-             "TERATAS (paling menguntungkan). Makin besar angkanya, makin akurat tapi makin lambat "
-             "scan-nya. Set ke 0 untuk mematikan fitur ini."
     )
 
     st.sidebar.caption("🔄 Auto-refresh aktif — data ambil ulang otomatis tiap 1 menit.")
@@ -413,12 +325,12 @@ if halaman == "🎯 Shock Dip Radar":
         st.session_state['last_update'] = time.time()
         st.rerun()
 
-    with st.spinner('Memindai item High Alch & bahan Crafting F2P...'):
+    with st.spinner('Memindai seluruh pasar OSRS (F2P & Member)...'):
         master_data = fetch_market_data()
 
     if not master_data.empty:
     
-        def apply_safety_lock(df, kolom_jual='Hourly_Low'):
+        def apply_safety_lock(df):
             def safe_calc_qty(row):
                 price = row['Live_Low']
                 limit = row['mappinglimit']
@@ -440,9 +352,7 @@ if halaman == "🎯 Shock Dip Radar":
             # jangan sampai melewati titik breakeven ini: Harga Jual - Pajak.
             # Di atas angka ini, order tetap akan laku tapi kamu justru RUGI walau
             # sudah kena pajak GE (pajak dipotong dari sisi JUAL, bukan ditambah ke beli).
-            # kolom_jual bisa diganti (misal 'Live_High' buat Tabel Spread) tergantung
-            # tabel mana yang pakai fungsi ini.
-            df['Batas_Beli_Maks'] = df[kolom_jual] - df['Tax']
+            df['Batas_Beli_Maks'] = df['Hourly_Low'] - df['Tax']
             df['Ruang_Naik_Persen'] = ((df['Batas_Beli_Maks'] - df['Live_Low']) / df['Live_Low']) * 100
 
             def tanda_ruang(pct):
@@ -460,13 +370,7 @@ if halaman == "🎯 Shock Dip Radar":
         # TABEL 1: SEMUA ITEM (ANJLOK > 2%)
         # ==========================================
         st.subheader("🔥 Tabel 1: Global — Anjlok Tajam (> 2%)")
-        st.write("Item High Alch/Crafting F2P yang sedang mengalami diskon besar dan menguntungkan:")
-        st.caption(
-            "📊 Kolom **Volume** = volume transaksi 5 menit TERAKHIR dibanding rata-rata 6 "
-            "periode 5-menit sebelumnya (data granular per item, bukan perkiraan kasar). "
-            "🚀 Lonjakan! (≥2x) = banyak orang jual/beli bareng, kemungkinan shock beneran. "
-            "⏳ Belum dicek = di luar batas N item teratas yang diatur di sidebar."
-        )
+        st.write("Semua barang (F2P & Member) di game yang sedang mengalami diskon besar dan menguntungkan:")
 
         df_f2p_2pct = master_data[
             (master_data['Live_Low'] > 0) & 
@@ -478,35 +382,8 @@ if halaman == "🎯 Shock Dip Radar":
         if not df_f2p_2pct.empty:
             df_f2p_2pct['Untung_Per_Biji'] = df_f2p_2pct['Hourly_Low'] - df_f2p_2pct['Live_Low'] - df_f2p_2pct['Tax']
             res_f2p1 = apply_safety_lock(df_f2p_2pct).sort_values(by='Total_Untung_Slot', ascending=False)
-
-            # Cek volume granular (5 menit) untuk N item teratas -- lihat penjelasan
-            # fungsi fetch_recent_volume_ratio di atas soal trade-off API-nya.
-            n_cek = min(int(vol_cek_limit), len(res_f2p1))
-            rasio_granular = []
-            if n_cek > 0:
-                prog_vol1 = st.progress(0, text="Mengecek volume granular Tabel 1...")
-                for i, (_, row) in enumerate(res_f2p1.head(n_cek).iterrows()):
-                    rasio_granular.append(fetch_recent_volume_ratio(int(row['id'])))
-                    prog_vol1.progress((i + 1) / n_cek, text=f"Cek volume: {row['mappingname']} ({i + 1}/{n_cek})")
-                    time.sleep(0.12)
-                prog_vol1.empty()
-            rasio_granular += [None] * (len(res_f2p1) - n_cek)
-            res_f2p1 = res_f2p1.copy()
-            res_f2p1['Rasio_Volume_5m'] = rasio_granular
-
-            def tanda_volume_5m(rasio):
-                if rasio is None or pd.isna(rasio):
-                    return '⏳ Belum dicek'
-                elif rasio >= 2:
-                    return '🚀 Lonjakan!'
-                elif rasio >= 1.2:
-                    return '📈 Naik'
-                else:
-                    return '➖ Normal'
-            res_f2p1['Tanda_Volume'] = res_f2p1['Rasio_Volume_5m'].apply(tanda_volume_5m)
-
-            res_f2p1_display = res_f2p1.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga', 'Tanda_Volume': 'Volume', 'Nilai_High_Alch': 'Nilai High Alch', 'Untung_Alch': 'Untung Alch'})
-            st.dataframe(res_f2p1_display[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian', 'Volume', 'Nilai High Alch', 'Untung Alch']], use_container_width=True)
+            res_f2p1_display = res_f2p1.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga'})
+            st.dataframe(res_f2p1_display[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
         else:
             res_f2p1 = pd.DataFrame()
             st.warning("⏳ Tidak ada item yang sedang anjlok > 2% saat ini.")
@@ -517,7 +394,7 @@ if halaman == "🎯 Shock Dip Radar":
         # TABEL 2: SEMUA ITEM (TURUN TIPIS 0.5% - 2%)
         # ==========================================
         st.subheader("⚡ Tabel 2: Global — Turun Tipis (0.5% - 2% / Main Cepat)")
-        st.write("Item High Alch/Crafting F2P berliku cepat yang sedang turun tipis — cocok untuk *scalping* kilat:")
+        st.write("Semua barang (F2P & Member) berliku cepat yang sedang turun tipis — cocok untuk *scalping* kilat:")
 
         df_f2p_05pct = master_data[
             (master_data['Live_Low'] > 0) & 
@@ -530,8 +407,8 @@ if halaman == "🎯 Shock Dip Radar":
         if not df_f2p_05pct.empty:
             df_f2p_05pct['Untung_Per_Biji'] = df_f2p_05pct['Hourly_Low'] - df_f2p_05pct['Live_Low'] - df_f2p_05pct['Tax']
             res_f2p2 = apply_safety_lock(df_f2p_05pct).sort_values(by='Total_Untung_Slot', ascending=False)
-            res_f2p2_display = res_f2p2.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga', 'Nilai_High_Alch': 'Nilai High Alch', 'Untung_Alch': 'Untung Alch'})
-            st.dataframe(res_f2p2_display[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian', 'Nilai High Alch', 'Untung Alch']], use_container_width=True)
+            res_f2p2_display = res_f2p2.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga'})
+            st.dataframe(res_f2p2_display[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
         else:
             res_f2p2 = pd.DataFrame()
             st.info("💡 Tidak ada item yang sedang turun tipis (0.5%-2%) saat ini.")
@@ -542,7 +419,7 @@ if halaman == "🎯 Shock Dip Radar":
         # TABEL 3: RADAR SULTAN & HIGH-MARGIN
         # ==========================================
         st.subheader("💎 Tabel 3: Global — Radar SULTAN & High-Margin")
-        st.write("Item High Alch/Crafting F2P bernilai tinggi yang memberikan **Untung ≥ 15.000 GP/biji** ATAU **Anjlok Ekstrem (> 3%)**:")
+        st.write("Memindai seluruh item bernilai tinggi (F2P & Member) yang memberikan **Untung ≥ 15.000 GP/biji** ATAU **Anjlok Ekstrem (> 3%)**:")
 
         master_data['Untung_Per_Biji'] = master_data['Hourly_Low'] - master_data['Live_Low'] - master_data['Tax']
         df_f2p_jackpot = master_data[
@@ -556,9 +433,9 @@ if halaman == "🎯 Shock Dip Radar":
 
         if not df_f2p_jackpot.empty:
             res_f2p_jack = apply_safety_lock(df_f2p_jackpot).sort_values(by='Total_Untung_Slot', ascending=False)
-            res_f2p_jack = res_f2p_jack.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga', 'Nilai_High_Alch': 'Nilai High Alch', 'Untung_Alch': 'Untung Alch'})
+            res_f2p_jack = res_f2p_jack.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga'})
             st.success("🚨 ADA PELUANG SULTAN YANG WORTH-IT!")
-            st.dataframe(res_f2p_jack[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian', 'Nilai High Alch', 'Untung Alch']], use_container_width=True)
+            st.dataframe(res_f2p_jack[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
         else:
             st.info("💡 Sedang tidak ada barang Sultan ber-margin besar saat ini.")
 
@@ -633,12 +510,11 @@ if halaman == "🎯 Shock Dip Radar":
                         'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual',
                         'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung',
                         'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian',
-                        'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga',
-                        'Nilai_High_Alch': 'Nilai High Alch', 'Untung_Alch': 'Untung Alch'
+                        'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga'
                     })
                     st.success(f"✅ {len(df_verified)} item lolos verifikasi shock dip historis!")
                     st.dataframe(
-                        df_verified[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian', 'Nilai High Alch', 'Untung Alch']],
+                        df_verified[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']],
                         use_container_width=True
                     )
                 else:
@@ -660,65 +536,10 @@ if halaman == "🎯 Shock Dip Radar":
         st.divider()
 
         # ==========================================
-        # TABEL 5: METODE HIGH ALCH (BELI -> ALCH, BUKAN JUAL GE)
-        # Beda dari Tabel 1-4 (exit-nya jual di GE), tabel ini exit-nya CAST High
-        # Level Alchemy -- jadi Harga Jual GE gak relevan lagi, yang dipakai malah
-        # Nilai High Alch (fixed) dikurangi harga Nature rune. Jml Beli sengaja pakai
-        # limit beli resmi GE per 4 jam, TIDAK dibatasi modal/volume harian lagi.
-        # ==========================================
-        st.subheader("🔮 Tabel 5: Metode High Alch (Beli → Alch)")
-        st.write(
-            "Item dibeli dengan tujuan **di-High Level Alchemy**, bukan dijual balik di GE — jadi "
-            "Harga Jual GE gak relevan di sini. **Jml Beli** dihitung dari batas beli resmi GE per "
-            "4 jam saja (bukan dibatasi modal per slot atau volume harian seperti tabel lain)."
-        )
-
-        df_alch = master_data[
-            (master_data['Live_Low'] > 0) &
-            (master_data['Untung_Alch'] > 0) &
-            (master_data['mappinglimit'] > 0)
-        ].copy()
-
-        if not df_alch.empty:
-            df_alch['Jml_Beli_Alch'] = df_alch['mappinglimit'].astype(int)
-            df_alch['Total_Untung_Alch'] = df_alch['Untung_Alch'] * df_alch['Jml_Beli_Alch']
-            df_alch['ROI_Alch_Persen'] = (df_alch['Untung_Alch'] / df_alch['Live_Low']) * 100
-            df_alch['Maks_Beli_Alch'] = df_alch['Nilai_High_Alch'] - df_alch['Harga_Nature_Rune']
-
-            def tanda_ruang_alch(row):
-                pct = ((row['Maks_Beli_Alch'] - row['Live_Low']) / row['Live_Low']) * 100
-                if pct >= 2:
-                    return '🟢 Aman Dinaikkan'
-                elif pct >= 0.5:
-                    return '🟡 Pas-pasan'
-                else:
-                    return '🔴 Jangan Naikkan'
-            df_alch['Status_Alch'] = df_alch.apply(tanda_ruang_alch, axis=1)
-
-            df_alch = df_alch.sort_values(by='Total_Untung_Alch', ascending=False)
-
-            df_alch_display = df_alch.rename(columns={
-                'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Jml_Beli_Alch': 'Jml Beli',
-                'Harga_Nature_Rune': 'Harga Nature Rune', 'Nilai_High_Alch': 'Nilai High Alch',
-                'Untung_Alch': 'Untung Alch/Biji', 'Total_Untung_Alch': 'Total Untung Alch',
-                'ROI_Alch_Persen': 'ROI (%)', 'Maks_Beli_Alch': 'Maks Beli (BEP)', 'Status_Alch': 'Status Harga'
-            })
-            st.dataframe(
-                df_alch_display[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga',
-                                  'Jml Beli', 'Harga Nature Rune', 'Nilai High Alch', 'Untung Alch/Biji',
-                                  'Total Untung Alch', 'ROI (%)']],
-                use_container_width=True
-            )
-        else:
-            st.info("💡 Tidak ada item dengan untung High Alch positif saat ini.")
-
-        st.divider()
-
-        # ==========================================
         # DUAL CHART (SEMUA ITEM)
         # ==========================================
         st.header("📈 Dual Chart Analisis (Semua Item)")
-        st.write("Pilih barang apa saja dari item High Alch/Crafting F2P untuk melihat grafik 5m & 1h secara bersamaan.")
+        st.write("Pilih barang apa saja dari seluruh item OSRS (F2P & Member) untuk melihat grafik 5m & 1h secara bersamaan.")
 
         daftar_item = master_data.sort_values(by='mappingname')[['id', 'mappingname']].drop_duplicates()
         pilihan_nama = st.selectbox("Pilih Barang:", daftar_item['mappingname'].tolist(), index=0)
@@ -1003,22 +824,6 @@ else:
             log_diagnostik.append({'Produk': nama_produk, 'Masalah': "Produk tidak ada data harga terkini — resep dilewati."})
             continue
 
-        # --- Volume JUAL produk (beda dari volume BAHAN yang dipakai buat batas beli) ---
-        # Ini pakai data 1 jam yang sudah ke-fetch (tidak ada API tambahan). Resep bisa
-        # untung di atas kertas tapi produknya jarang ada pembeli -- ini buat deteksi itu.
-        vol_low_p = product_ref['H_VolLow'] if pd.notna(product_ref.get('H_VolLow')) else 0
-        vol_high_p = product_ref['H_VolHigh'] if pd.notna(product_ref.get('H_VolHigh')) else 0
-        vol_produk_1h = vol_low_p + vol_high_p
-
-        if vol_produk_1h >= 100:
-            status_vol_produk = '🟢 Tinggi'
-        elif vol_produk_1h >= 10:
-            status_vol_produk = '🟡 Sedang'
-        elif vol_produk_1h >= 1:
-            status_vol_produk = '🟠 Rendah'
-        else:
-            status_vol_produk = '🔴 Sangat Rendah/Tidak Ada'
-
         # Pajak dihitung terpisah untuk skenario jual di Low vs High (lebih akurat
         # daripada memakai satu nilai pajak untuk keduanya)
         tax_low = calc_ge_tax(live_low)
@@ -1044,8 +849,6 @@ else:
             'Untung/Eksekusi (High)': round(untung_high),
             'Maks Eksekusi (Likuiditas, 4 Jam)': int(maks_eksekusi_likuiditas) if maks_eksekusi_likuiditas is not None else None,
             'ROI (%)': round(roi_persen, 1),
-            'Volume Jual Produk (1 Jam)': round(vol_produk_1h),
-            'Status Volume Jual': status_vol_produk,
             '_ingredients': ingredient_detail,
             '_qty_produced': qty_produced,
         })
@@ -1077,10 +880,6 @@ else:
     metode_tersedia = sorted(df_hasil['Metode'].unique().tolist()) if not df_hasil.empty else []
     metode_pilihan = st.sidebar.multiselect("Filter Kategori Resep", options=metode_tersedia, default=metode_tersedia)
     sembunyikan_modal_kurang = st.sidebar.checkbox("Sembunyikan resep yang modalnya kurang", value=False)
-    sembunyikan_vol_rendah = st.sidebar.checkbox(
-        "Sembunyikan produk dengan volume jual rendah/sangat rendah", value=False,
-        help="Buang resep yang produk jadinya (🟠 Rendah / 🔴 Sangat Rendah) jarang ada pembeli, meski marginnya kelihatan bagus."
-    )
 
     st.divider()
 
@@ -1090,21 +889,16 @@ else:
         df_tampil = df_hasil[df_hasil['Metode'].isin(metode_pilihan)].copy()
         if sembunyikan_modal_kurang:
             df_tampil = df_tampil[df_tampil['Bisa Dijalankan?'] == '✅']
-        if sembunyikan_vol_rendah:
-            df_tampil = df_tampil[~df_tampil['Status Volume Jual'].isin(['🟠 Rendah', '🔴 Sangat Rendah/Tidak Ada'])]
         df_tampil = df_tampil.sort_values(by='Profit Realistis (High)', ascending=False)
 
         st.subheader(f"📋 {len(df_tampil)} Resep Menguntungkan Ditemukan")
         st.caption(
             "Diurutkan dari **Profit Realistis (High)** tertinggi — sudah memperhitungkan batas modal & "
             "likuiditas bahan, bukan cuma margin per unit. 'Untung/Eksekusi (Low/High)' = profit SEKALI proses "
-            "kalau produk terjual di harga Low (cepat) atau High (lebih untung, lebih lama). Kolom "
-            "**Status Volume Jual** = seberapa aktif produk JADINYA diperdagangkan (🟢 Tinggi / 🟡 Sedang / "
-            "🟠 Rendah / 🔴 Sangat Rendah) — kalau rendah, hati-hati: hasil produksimu bisa numpuk lama "
-            "sebelum laku, meski marginnya kelihatan bagus di atas kertas."
+            "kalau produk terjual di harga Low (cepat) atau High (lebih untung, lebih lama)."
         )
         st.dataframe(
-            df_tampil[['Produk', 'Metode', 'Syarat', 'Bisa Dijalankan?', 'Status Volume Jual', 'Modal/Eksekusi',
+            df_tampil[['Produk', 'Metode', 'Syarat', 'Bisa Dijalankan?', 'Modal/Eksekusi',
                        'Untung/Eksekusi (Low)', 'Untung/Eksekusi (High)', 'Maks Eksekusi Realistis',
                        'Profit Realistis (Low)', 'Profit Realistis (High)', 'ROI (%)']],
             use_container_width=True
@@ -1122,11 +916,10 @@ else:
             st.write(f"**Metode:** {baris['Metode']} · **Syarat:** {baris['Syarat']}")
             st.write(f"1 kali eksekusi menghasilkan **{baris['_qty_produced']:g}x {produk_pilihan}**, butuh bahan:")
             st.dataframe(pd.DataFrame(baris['_ingredients']), use_container_width=True)
-            c1, c2, c3, c4 = st.columns(4)
+            c1, c2, c3 = st.columns(3)
             c1.metric("Modal per Eksekusi", f"{baris['Modal/Eksekusi']:,.0f} GP")
             c2.metric("Maks Eksekusi Realistis", f"{baris['Maks Eksekusi Realistis']:,.0f}x")
             c3.metric("Profit Realistis (High)", f"{baris['Profit Realistis (High)']:,.0f} GP")
-            c4.metric("Volume Jual Produk", f"{baris['Volume Jual Produk (1 Jam)']:,.0f}/jam", baris['Status Volume Jual'])
         else:
             st.info("Tidak ada resep yang cocok dengan filter saat ini.")
 
