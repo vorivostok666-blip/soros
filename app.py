@@ -27,12 +27,17 @@ BASE_URL = 'https://prices.runescape.wiki/api/v1/osrs'
 
 @st.cache_data(ttl=3600)
 def fetch_mapping():
-    """Mapping SEMUA item OSRS: id, nama, limit beli per 4 jam, status member."""
+    """Mapping SEMUA item OSRS: id, nama, limit beli per 4 jam, status member, nilai high alch."""
     req = requests.get(f'{BASE_URL}/mapping', headers=HEADERS)
-    df = pd.DataFrame(req.json())[['id', 'name', 'limit', 'members']]
+    df = pd.DataFrame(req.json())
+    for col in ['id', 'name', 'limit', 'members', 'highalch']:
+        if col not in df.columns:
+            df[col] = None
+    df = df[['id', 'name', 'limit', 'members', 'highalch']]
     df.rename(columns={'name': 'mappingname', 'limit': 'mappinglimit'}, inplace=True)
     df['id'] = pd.to_numeric(df['id'], errors='coerce').fillna(0).astype(int)
     df['mappinglimit'] = pd.to_numeric(df['mappinglimit'], errors='coerce').fillna(0)
+    df['highalch'] = pd.to_numeric(df['highalch'], errors='coerce').fillna(0)
     df['Tipe'] = df['members'].apply(lambda m: '👑 Member' if m else '🆓 F2P')
     return df
 
@@ -135,9 +140,9 @@ if halaman == "🎯 Shock Dip Radar":
                 if col in master.columns:
                     master[col] = pd.to_numeric(master[col], errors='coerce').fillna(0)
 
-            # Hitung Pajak GE (2%, dibatasi maks 5 juta GP per item — penting sekarang
-            # karena item Member bisa bernilai ratusan juta GP)
+            # Hitung Pajak GE (2%, dibatasi maks 5 juta GP per item)
             master['Tax'] = master['Hourly_Low'].apply(calc_ge_tax)
+
             return master
         except Exception as e:
             st.error(f"Gagal mengambil data API: {e}")
@@ -221,6 +226,36 @@ if halaman == "🎯 Shock Dip Radar":
         return hasil
 
     # ==========================================
+    # CEK VOLUME GRANULAR (5 MENIT) PER ITEM
+    # Lebih presisi dari perkiraan kasar (1 jam vs rata-rata harian) karena
+    # membandingkan periode 5 menit TERAKHIR dengan rata-rata 6 periode 5 menit
+    # sebelumnya -- sama persis logikanya dengan indikator di Dual Chart.
+    # Trade-off: 1 panggilan API tambahan per item yang dicek.
+    # ==========================================
+    @st.cache_data(ttl=120)
+    def fetch_recent_volume_ratio(item_id):
+        headers = {'User-Agent': 'Belajar_Data_Analisis_Bot_Lokal'}
+        try:
+            url = f"https://prices.runescape.wiki/api/v1/osrs/timeseries?timestep=5m&id={item_id}"
+            resp = requests.get(url, headers=headers, timeout=10)
+            resp.raise_for_status()
+            data = resp.json().get('data', [])
+            if len(data) < 3:
+                return None
+            df_v = pd.DataFrame(data).tail(7)
+            for c in ['lowPriceVolume', 'highPriceVolume']:
+                if c in df_v.columns:
+                    df_v[c] = pd.to_numeric(df_v[c], errors='coerce').fillna(0)
+                else:
+                    df_v[c] = 0
+            df_v['Total_Vol'] = df_v['lowPriceVolume'] + df_v['highPriceVolume']
+            vol_now = df_v['Total_Vol'].iloc[-1]
+            vol_baseline = df_v['Total_Vol'].iloc[:-1].mean()
+            return (vol_now / vol_baseline) if vol_baseline > 0 else None
+        except Exception:
+            return None
+
+    # ==========================================
     # AUTO-REFRESH (5 MENIT) & TOMBOL REFRESH MANUAL
     # ==========================================
     st.session_state['last_update'] = time.time()
@@ -253,8 +288,8 @@ if halaman == "🎯 Shock Dip Radar":
 
     total_modal = st.sidebar.number_input(
         "Masukkan Total Modal Anda (GP):", 
-        min_value=50000, 
-        value=1500000, 
+        min_value=500, 
+        value=4000000, 
         step=100000,
         format="%d",
         help=f"Modal ini akan dibagi rata ke {jumlah_slot} slot aktif Grand Exchange."
@@ -277,6 +312,14 @@ if halaman == "🎯 Shock Dip Radar":
     min_profit_total = st.sidebar.number_input(
         "Min. Profit Total per Slot (GP)", min_value=0, value=5000, step=1000,
         help="Item dengan potensi untung per slot di bawah angka ini akan disaring dari Tabel 4 (Verified Shock Dips)."
+    )
+
+    st.sidebar.header("📊 Cek Volume Granular (Tabel 1)")
+    vol_cek_limit = st.sidebar.number_input(
+        "Jumlah Item Dicek Volume Detail", min_value=0, max_value=50, value=20, step=5,
+        help="Tabel 1 akan mengecek volume 5-menit granular (1 API call per item) untuk N item "
+             "TERATAS (paling menguntungkan). Makin besar angkanya, makin akurat tapi makin lambat "
+             "scan-nya. Set ke 0 untuk mematikan fitur ini."
     )
 
     st.sidebar.caption("🔄 Auto-refresh aktif — data ambil ulang otomatis tiap 1 menit.")
@@ -330,7 +373,7 @@ if halaman == "🎯 Shock Dip Radar":
 
     if not master_data.empty:
     
-        def apply_safety_lock(df):
+        def apply_safety_lock(df, kolom_jual='Hourly_Low'):
             def safe_calc_qty(row):
                 price = row['Live_Low']
                 limit = row['mappinglimit']
@@ -352,7 +395,9 @@ if halaman == "🎯 Shock Dip Radar":
             # jangan sampai melewati titik breakeven ini: Harga Jual - Pajak.
             # Di atas angka ini, order tetap akan laku tapi kamu justru RUGI walau
             # sudah kena pajak GE (pajak dipotong dari sisi JUAL, bukan ditambah ke beli).
-            df['Batas_Beli_Maks'] = df['Hourly_Low'] - df['Tax']
+            # kolom_jual bisa diganti (misal 'Live_High' buat Tabel Spread) tergantung
+            # tabel mana yang pakai fungsi ini.
+            df['Batas_Beli_Maks'] = df[kolom_jual] - df['Tax']
             df['Ruang_Naik_Persen'] = ((df['Batas_Beli_Maks'] - df['Live_Low']) / df['Live_Low']) * 100
 
             def tanda_ruang(pct):
@@ -371,6 +416,12 @@ if halaman == "🎯 Shock Dip Radar":
         # ==========================================
         st.subheader("🔥 Tabel 1: Global — Anjlok Tajam (> 2%)")
         st.write("Semua barang (F2P & Member) di game yang sedang mengalami diskon besar dan menguntungkan:")
+        st.caption(
+            "📊 Kolom **Volume** = volume transaksi 5 menit TERAKHIR dibanding rata-rata 6 "
+            "periode 5-menit sebelumnya (data granular per item, bukan perkiraan kasar). "
+            "🚀 Lonjakan! (≥2x) = banyak orang jual/beli bareng, kemungkinan shock beneran. "
+            "⏳ Belum dicek = di luar batas N item teratas yang diatur di sidebar."
+        )
 
         df_f2p_2pct = master_data[
             (master_data['Live_Low'] > 0) & 
@@ -382,8 +433,35 @@ if halaman == "🎯 Shock Dip Radar":
         if not df_f2p_2pct.empty:
             df_f2p_2pct['Untung_Per_Biji'] = df_f2p_2pct['Hourly_Low'] - df_f2p_2pct['Live_Low'] - df_f2p_2pct['Tax']
             res_f2p1 = apply_safety_lock(df_f2p_2pct).sort_values(by='Total_Untung_Slot', ascending=False)
-            res_f2p1_display = res_f2p1.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga'})
-            st.dataframe(res_f2p1_display[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']], use_container_width=True)
+
+            # Cek volume granular (5 menit) untuk N item teratas -- lihat penjelasan
+            # fungsi fetch_recent_volume_ratio di atas soal trade-off API-nya.
+            n_cek = min(int(vol_cek_limit), len(res_f2p1))
+            rasio_granular = []
+            if n_cek > 0:
+                prog_vol1 = st.progress(0, text="Mengecek volume granular Tabel 1...")
+                for i, (_, row) in enumerate(res_f2p1.head(n_cek).iterrows()):
+                    rasio_granular.append(fetch_recent_volume_ratio(int(row['id'])))
+                    prog_vol1.progress((i + 1) / n_cek, text=f"Cek volume: {row['mappingname']} ({i + 1}/{n_cek})")
+                    time.sleep(0.12)
+                prog_vol1.empty()
+            rasio_granular += [None] * (len(res_f2p1) - n_cek)
+            res_f2p1 = res_f2p1.copy()
+            res_f2p1['Rasio_Volume_5m'] = rasio_granular
+
+            def tanda_volume_5m(rasio):
+                if rasio is None or pd.isna(rasio):
+                    return '⏳ Belum dicek'
+                elif rasio >= 2:
+                    return '🚀 Lonjakan!'
+                elif rasio >= 1.2:
+                    return '📈 Naik'
+                else:
+                    return '➖ Normal'
+            res_f2p1['Tanda_Volume'] = res_f2p1['Rasio_Volume_5m'].apply(tanda_volume_5m)
+
+            res_f2p1_display = res_f2p1.rename(columns={'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual', 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga', 'Tanda_Volume': 'Volume'})
+            st.dataframe(res_f2p1_display[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian', 'Volume']], use_container_width=True)
         else:
             res_f2p1 = pd.DataFrame()
             st.warning("⏳ Tidak ada item yang sedang anjlok > 2% saat ini.")
@@ -824,6 +902,22 @@ else:
             log_diagnostik.append({'Produk': nama_produk, 'Masalah': "Produk tidak ada data harga terkini — resep dilewati."})
             continue
 
+        # --- Volume JUAL produk (beda dari volume BAHAN yang dipakai buat batas beli) ---
+        # Ini pakai data 1 jam yang sudah ke-fetch (tidak ada API tambahan). Resep bisa
+        # untung di atas kertas tapi produknya jarang ada pembeli -- ini buat deteksi itu.
+        vol_low_p = product_ref['H_VolLow'] if pd.notna(product_ref.get('H_VolLow')) else 0
+        vol_high_p = product_ref['H_VolHigh'] if pd.notna(product_ref.get('H_VolHigh')) else 0
+        vol_produk_1h = vol_low_p + vol_high_p
+
+        if vol_produk_1h >= 100:
+            status_vol_produk = '🟢 Tinggi'
+        elif vol_produk_1h >= 10:
+            status_vol_produk = '🟡 Sedang'
+        elif vol_produk_1h >= 1:
+            status_vol_produk = '🟠 Rendah'
+        else:
+            status_vol_produk = '🔴 Sangat Rendah/Tidak Ada'
+
         # Pajak dihitung terpisah untuk skenario jual di Low vs High (lebih akurat
         # daripada memakai satu nilai pajak untuk keduanya)
         tax_low = calc_ge_tax(live_low)
@@ -849,6 +943,8 @@ else:
             'Untung/Eksekusi (High)': round(untung_high),
             'Maks Eksekusi (Likuiditas, 4 Jam)': int(maks_eksekusi_likuiditas) if maks_eksekusi_likuiditas is not None else None,
             'ROI (%)': round(roi_persen, 1),
+            'Volume Jual Produk (1 Jam)': round(vol_produk_1h),
+            'Status Volume Jual': status_vol_produk,
             '_ingredients': ingredient_detail,
             '_qty_produced': qty_produced,
         })
@@ -880,6 +976,10 @@ else:
     metode_tersedia = sorted(df_hasil['Metode'].unique().tolist()) if not df_hasil.empty else []
     metode_pilihan = st.sidebar.multiselect("Filter Kategori Resep", options=metode_tersedia, default=metode_tersedia)
     sembunyikan_modal_kurang = st.sidebar.checkbox("Sembunyikan resep yang modalnya kurang", value=False)
+    sembunyikan_vol_rendah = st.sidebar.checkbox(
+        "Sembunyikan produk dengan volume jual rendah/sangat rendah", value=False,
+        help="Buang resep yang produk jadinya (🟠 Rendah / 🔴 Sangat Rendah) jarang ada pembeli, meski marginnya kelihatan bagus."
+    )
 
     st.divider()
 
@@ -889,16 +989,21 @@ else:
         df_tampil = df_hasil[df_hasil['Metode'].isin(metode_pilihan)].copy()
         if sembunyikan_modal_kurang:
             df_tampil = df_tampil[df_tampil['Bisa Dijalankan?'] == '✅']
+        if sembunyikan_vol_rendah:
+            df_tampil = df_tampil[~df_tampil['Status Volume Jual'].isin(['🟠 Rendah', '🔴 Sangat Rendah/Tidak Ada'])]
         df_tampil = df_tampil.sort_values(by='Profit Realistis (High)', ascending=False)
 
         st.subheader(f"📋 {len(df_tampil)} Resep Menguntungkan Ditemukan")
         st.caption(
             "Diurutkan dari **Profit Realistis (High)** tertinggi — sudah memperhitungkan batas modal & "
             "likuiditas bahan, bukan cuma margin per unit. 'Untung/Eksekusi (Low/High)' = profit SEKALI proses "
-            "kalau produk terjual di harga Low (cepat) atau High (lebih untung, lebih lama)."
+            "kalau produk terjual di harga Low (cepat) atau High (lebih untung, lebih lama). Kolom "
+            "**Status Volume Jual** = seberapa aktif produk JADINYA diperdagangkan (🟢 Tinggi / 🟡 Sedang / "
+            "🟠 Rendah / 🔴 Sangat Rendah) — kalau rendah, hati-hati: hasil produksimu bisa numpuk lama "
+            "sebelum laku, meski marginnya kelihatan bagus di atas kertas."
         )
         st.dataframe(
-            df_tampil[['Produk', 'Metode', 'Syarat', 'Bisa Dijalankan?', 'Modal/Eksekusi',
+            df_tampil[['Produk', 'Metode', 'Syarat', 'Bisa Dijalankan?', 'Status Volume Jual', 'Modal/Eksekusi',
                        'Untung/Eksekusi (Low)', 'Untung/Eksekusi (High)', 'Maks Eksekusi Realistis',
                        'Profit Realistis (Low)', 'Profit Realistis (High)', 'ROI (%)']],
             use_container_width=True
@@ -916,10 +1021,11 @@ else:
             st.write(f"**Metode:** {baris['Metode']} · **Syarat:** {baris['Syarat']}")
             st.write(f"1 kali eksekusi menghasilkan **{baris['_qty_produced']:g}x {produk_pilihan}**, butuh bahan:")
             st.dataframe(pd.DataFrame(baris['_ingredients']), use_container_width=True)
-            c1, c2, c3 = st.columns(3)
+            c1, c2, c3, c4 = st.columns(4)
             c1.metric("Modal per Eksekusi", f"{baris['Modal/Eksekusi']:,.0f} GP")
             c2.metric("Maks Eksekusi Realistis", f"{baris['Maks Eksekusi Realistis']:,.0f}x")
             c3.metric("Profit Realistis (High)", f"{baris['Profit Realistis (High)']:,.0f} GP")
+            c4.metric("Volume Jual Produk", f"{baris['Volume Jual Produk (1 Jam)']:,.0f}/jam", baris['Status Volume Jual'])
         else:
             st.info("Tidak ada resep yang cocok dengan filter saat ini.")
 
