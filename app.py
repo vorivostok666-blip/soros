@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
 import requests
 import time
@@ -7,15 +6,9 @@ import altair as alt
 import numpy as np
 import math
 from pathlib import Path
-from streamlit_autorefresh import st_autorefresh
 
 # Konfigurasi Tampilan Halaman Web (Responsif untuk HP)
 st.set_page_config(page_title="OSRS Global Flipping Radar", layout="wide")
-
-# Auto-refresh seluruh app tiap 1 menit (60.000 ms) — pas dengan cache data (ttl=60
-# detik), jadi dijamin selalu dapat data BARU tiap kali refresh tanpa sia-sia nanya
-# ke API lebih sering dari yang perlu.
-st_autorefresh(interval=1 * 60 * 1000, key="auto_refresh_1menit")
 
 # ==========================================
 # FUNGSI BERSAMA (dulu di common.py, sekarang digabung di sini
@@ -294,46 +287,7 @@ if halaman == "🎯 Shock Dip Radar":
              "1 panggilan API terpisah). Naikkan kalau mau lebih lengkap, tapi scan jadi lebih lambat."
     )
 
-    st.sidebar.caption("🔄 Auto-refresh aktif — data ambil ulang otomatis tiap 1 menit.")
-
-    # Countdown JS murni (jalan di browser, per detik) -- sengaja TIDAK pakai rerun
-    # Streamlit tiap detik karena itu akan bikin seluruh app lag/flicker. Timer ini
-    # otomatis restart ke 1:00 tiap kali app rerun (baik dari auto-refresh 1 menit
-    # maupun klik manual), jadi selalu sinkron dengan refresh yang sesungguhnya.
-    with st.sidebar:
-        components.html(f"""
-            <!-- nonce:{time.time()} -->
-            <div style="text-align:center; font-family:sans-serif; padding:4px 0;">
-                <span id="cd-label" style="font-size:0.85em; color:#888;">Refresh berikutnya dalam</span><br>
-                <span id="cd-timer" style="font-size:1.6em; font-weight:bold; color:#28a745;">01:00</span>
-            </div>
-            <script>
-                let total = 60;
-                const timerEl = document.getElementById('cd-timer');
-                const labelEl = document.getElementById('cd-label');
-                function tick() {{
-                    if (total <= 0) {{
-                        timerEl.textContent = "00:00";
-                        timerEl.style.color = "#dc3545";
-                        labelEl.textContent = "Sedang refresh...";
-                        return;
-                    }}
-                    const m = String(Math.floor(total / 60)).padStart(2, '0');
-                    const s = String(total % 60).padStart(2, '0');
-                    timerEl.textContent = m + ":" + s;
-                    if (total <= 10) {{
-                        timerEl.style.color = "#dc3545";
-                        labelEl.textContent = "⚠️ Bersiap-siap, refresh sebentar lagi";
-                    }} else {{
-                        timerEl.style.color = "#28a745";
-                        labelEl.textContent = "Refresh berikutnya dalam";
-                    }}
-                    total -= 1;
-                }}
-                tick();
-                setInterval(tick, 1000);
-            </script>
-        """, height=70)
+    st.sidebar.caption("💡 Data di-cache 60 detik — klik tombol di bawah kapan pun kamu mau data terbaru.")
 
     if st.sidebar.button("🔄 Refresh Sekarang"):
         fetch_market_data.clear()
@@ -538,16 +492,32 @@ if halaman == "🎯 Shock Dip Radar":
                     return '➖ Normal'
             res_spread['Tanda_Volume'] = res_spread['Rasio_Volume_5m'].apply(tanda_volume_5m)
 
+            # --- Skor Gabungan: rangking Vol Harian & lonjakan Volume sekaligus ---
+            # Dua metrik ini beda skala jauh (Vol Harian bisa ribuan, rasio lonjakan
+            # cuma sekitar 0-10), jadi gak bisa dijumlah langsung -- masing-masing
+            # diubah dulu jadi PERINGKAT PERSENTIL (0-100, item tertinggi = 100),
+            # baru dirata-rata. Item yang kuat di KEDUA metrik otomatis dapat skor
+            # tertinggi. Klik header kolom "Skor Gabungan" di tabel buat urutkan.
+            rank_vol_harian = res_spread['D_VolLow'].rank(pct=True, na_option='bottom')
+            rank_vol_lonjakan = res_spread['Rasio_Volume_5m'].rank(pct=True, na_option='bottom')
+            res_spread['Skor_Gabungan'] = ((rank_vol_harian + rank_vol_lonjakan) / 2 * 100).round(1)
+
             if len(res_spread) > n_cek:
                 st.warning(f"⚠️ Ada {len(res_spread)} item total, tapi cuma {n_cek} teratas yang dicek volume granularnya (batas keamanan). Naikkan 'Batas Keamanan Cek Volume' di sidebar kalau mau lebih banyak — tapi scan jadi lebih lambat.")
+
+            st.caption(
+                "🎯 **Skor Gabungan** (0-100) = rangking Vol Harian + lonjakan Volume digabung jadi satu "
+                "angka. Klik header kolomnya di tabel untuk urutkan dari yang paling kuat di KEDUA metrik "
+                "sekaligus — bukan cuma salah satu."
+            )
 
             res_spread_display = res_spread.rename(columns={
                 'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli',
                 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)',
-                'D_VolLow': 'Vol Harian', 'Tanda_Volume': 'Volume'
+                'D_VolLow': 'Vol Harian', 'Tanda_Volume': 'Volume', 'Skor_Gabungan': 'Skor Gabungan'
             })
             st.dataframe(
-                res_spread_display[['Nama Barang', 'Vol Harian', 'Volume', 'Harga Beli', 'Jml Beli', 'Pr. Untung', 'ROI (%)']],
+                res_spread_display[['Nama Barang', 'Vol Harian', 'Volume', 'Skor Gabungan', 'Harga Beli', 'Jml Beli', 'Pr. Untung', 'ROI (%)']],
                 use_container_width=True
             )
         else:
