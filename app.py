@@ -287,10 +287,11 @@ if halaman == "🎯 Shock Dip Radar":
 
     st.sidebar.header("📊 Cek Volume Granular (Tabel 2)")
     vol_cek_limit = st.sidebar.number_input(
-        "Jumlah Item Dicek Volume Detail", min_value=0, max_value=50, value=20, step=5,
-        help="Tabel 2 akan mengecek volume 5-menit granular (1 API call per item) untuk N item "
-             "TERATAS (paling menguntungkan). Makin besar angkanya, makin akurat tapi makin lambat "
-             "scan-nya. Set ke 0 untuk mematikan fitur ini."
+        "Batas Keamanan Cek Volume", min_value=0, max_value=500, value=200, step=25,
+        help="Tabel 2 mengecek volume 5-menit granular (1 API call per item) untuk SEMUA item di "
+             "tabel, sampai batas ini. Ini bukan pembatasan yang disengaja — cuma pengaman teknis "
+             "biar app tidak macet/timeout kalau kandidatnya sampai ratusan item (tiap item butuh "
+             "1 panggilan API terpisah). Naikkan kalau mau lebih lengkap, tapi scan jadi lebih lambat."
     )
 
     st.sidebar.caption("🔄 Auto-refresh aktif — data ambil ulang otomatis tiap 1 menit.")
@@ -495,7 +496,8 @@ if halaman == "🎯 Shock Dip Radar":
             "📊 Kolom **Volume** = volume transaksi 5 menit TERAKHIR dibanding rata-rata 6 "
             "periode 5-menit sebelumnya (data granular per item, bukan perkiraan kasar). "
             "🚀 Lonjakan! (≥2x) = banyak orang jual/beli bareng, makin meyakinkan celah harganya real. "
-            "⏳ Belum dicek = di luar batas N item teratas yang diatur di sidebar."
+            "⏳ Belum dicek = item ini berada di luar batas keamanan API (atur di sidebar) — bukan "
+            "sengaja dilewati, cuma pengaman biar app gak macet kalau kandidatnya ratusan item."
         )
 
         df_spread = master_data[
@@ -509,12 +511,13 @@ if halaman == "🎯 Shock Dip Radar":
         if not df_spread.empty:
             res_spread = apply_safety_lock(df_spread, kolom_jual='Live_High').sort_values(by='Total_Untung_Slot', ascending=False)
 
-            # Cek volume granular (5 menit) untuk N item teratas -- lihat penjelasan
-            # fungsi fetch_recent_volume_ratio di atas soal trade-off API-nya.
+            # Cek volume granular (5 menit) untuk SEMUA item, sampai batas keamanan
+            # di sidebar (bukan pembatasan sengaja, cuma jaga app gak macet/timeout
+            # kalau kandidatnya ratusan item -- tiap item butuh 1 panggilan API terpisah).
             n_cek = min(int(vol_cek_limit), len(res_spread))
             rasio_granular = []
             if n_cek > 0:
-                prog_vol2 = st.progress(0, text="Mengecek volume granular Tabel 2...")
+                prog_vol2 = st.progress(0, text=f"Mengecek volume granular Tabel 2 (0/{n_cek})...")
                 for i, (_, row) in enumerate(res_spread.head(n_cek).iterrows()):
                     rasio_granular.append(fetch_recent_volume_ratio(int(row['id'])))
                     prog_vol2.progress((i + 1) / n_cek, text=f"Cek volume: {row['mappingname']} ({i + 1}/{n_cek})")
@@ -535,14 +538,16 @@ if halaman == "🎯 Shock Dip Radar":
                     return '➖ Normal'
             res_spread['Tanda_Volume'] = res_spread['Rasio_Volume_5m'].apply(tanda_volume_5m)
 
+            if len(res_spread) > n_cek:
+                st.warning(f"⚠️ Ada {len(res_spread)} item total, tapi cuma {n_cek} teratas yang dicek volume granularnya (batas keamanan). Naikkan 'Batas Keamanan Cek Volume' di sidebar kalau mau lebih banyak — tapi scan jadi lebih lambat.")
+
             res_spread_display = res_spread.rename(columns={
-                'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Live_High': 'Harga Jual',
+                'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli',
                 'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)',
-                'D_VolLow': 'Vol Harian', 'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga',
-                'Tanda_Volume': 'Volume'
+                'D_VolLow': 'Vol Harian', 'Tanda_Volume': 'Volume'
             })
             st.dataframe(
-                res_spread_display[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian', 'Volume']],
+                res_spread_display[['Nama Barang', 'Vol Harian', 'Volume', 'Harga Beli', 'Jml Beli', 'Pr. Untung', 'ROI (%)']],
                 use_container_width=True
             )
         else:
@@ -751,8 +756,9 @@ else:
         df_map = fetch_mapping()
         df_latest = fetch_latest()
         df_1h = fetch_1h()
+        df_24h = fetch_24h()
 
-    price_ref = df_map.merge(df_latest, on='id', how='left').merge(df_1h, on='id', how='left').set_index('id')
+    price_ref = df_map.merge(df_latest, on='id', how='left').merge(df_1h, on='id', how='left').merge(df_24h, on='id', how='left').set_index('id')
 
 
     def get_ref(item_id):
@@ -840,11 +846,16 @@ else:
             continue
 
         # --- Volume JUAL produk (beda dari volume BAHAN yang dipakai buat batas beli) ---
-        # Ini pakai data 1 jam yang sudah ke-fetch (tidak ada API tambahan). Resep bisa
-        # untung di atas kertas tapi produknya jarang ada pembeli -- ini buat deteksi itu.
+        # Ini pakai data 1 jam & 24 jam yang sudah ke-fetch (tidak ada API tambahan). Resep bisa
+        # untung di atas kertas tapi produknya jarang ada pembeli -- ini buat deteksi itu, ditampilkan
+        # sebagai ANGKA asli (bukan cuma label kategori) biar lebih presisi buat kamu nilai sendiri.
         vol_low_p = product_ref['H_VolLow'] if pd.notna(product_ref.get('H_VolLow')) else 0
         vol_high_p = product_ref['H_VolHigh'] if pd.notna(product_ref.get('H_VolHigh')) else 0
         vol_produk_1h = vol_low_p + vol_high_p
+
+        vol_low_p_24h = product_ref['D_VolLow'] if pd.notna(product_ref.get('D_VolLow')) else 0
+        vol_high_p_24h = product_ref['D_VolHigh'] if pd.notna(product_ref.get('D_VolHigh')) else 0
+        vol_produk_24h = vol_low_p_24h + vol_high_p_24h
 
         if vol_produk_1h >= 100:
             status_vol_produk = '🟢 Tinggi'
@@ -881,6 +892,7 @@ else:
             'Maks Eksekusi (Likuiditas, 4 Jam)': int(maks_eksekusi_likuiditas) if maks_eksekusi_likuiditas is not None else None,
             'ROI (%)': round(roi_persen, 1),
             'Volume Jual Produk (1 Jam)': round(vol_produk_1h),
+            'Volume Jual Produk (24 Jam)': round(vol_produk_24h),
             'Status Volume Jual': status_vol_produk,
             '_ingredients': ingredient_detail,
             '_qty_produced': qty_produced,
@@ -935,12 +947,12 @@ else:
             "Diurutkan dari **Profit Realistis (High)** tertinggi — sudah memperhitungkan batas modal & "
             "likuiditas bahan, bukan cuma margin per unit. 'Untung/Eksekusi (Low/High)' = profit SEKALI proses "
             "kalau produk terjual di harga Low (cepat) atau High (lebih untung, lebih lama). Kolom "
-            "**Status Volume Jual** = seberapa aktif produk JADINYA diperdagangkan (🟢 Tinggi / 🟡 Sedang / "
-            "🟠 Rendah / 🔴 Sangat Rendah) — kalau rendah, hati-hati: hasil produksimu bisa numpuk lama "
+            "**Volume Jual Produk (1 Jam)** & **(24 Jam)** = angka asli transaksi produk JADINYA (bukan bahan) "
+            "dalam 1 jam & 24 jam terakhir — kalau kecil, hati-hati: hasil produksimu bisa numpuk lama "
             "sebelum laku, meski marginnya kelihatan bagus di atas kertas."
         )
         st.dataframe(
-            df_tampil[['Produk', 'Metode', 'Syarat', 'Bisa Dijalankan?', 'Status Volume Jual', 'Modal/Eksekusi',
+            df_tampil[['Produk', 'Metode', 'Syarat', 'Bisa Dijalankan?', 'Volume Jual Produk (1 Jam)', 'Volume Jual Produk (24 Jam)', 'Modal/Eksekusi',
                        'Untung/Eksekusi (Low)', 'Untung/Eksekusi (High)', 'Maks Eksekusi Realistis',
                        'Profit Realistis (Low)', 'Profit Realistis (High)', 'ROI (%)']],
             use_container_width=True
@@ -958,11 +970,12 @@ else:
             st.write(f"**Metode:** {baris['Metode']} · **Syarat:** {baris['Syarat']}")
             st.write(f"1 kali eksekusi menghasilkan **{baris['_qty_produced']:g}x {produk_pilihan}**, butuh bahan:")
             st.dataframe(pd.DataFrame(baris['_ingredients']), use_container_width=True)
-            c1, c2, c3, c4 = st.columns(4)
+            c1, c2, c3, c4, c5 = st.columns(5)
             c1.metric("Modal per Eksekusi", f"{baris['Modal/Eksekusi']:,.0f} GP")
             c2.metric("Maks Eksekusi Realistis", f"{baris['Maks Eksekusi Realistis']:,.0f}x")
             c3.metric("Profit Realistis (High)", f"{baris['Profit Realistis (High)']:,.0f} GP")
-            c4.metric("Volume Jual Produk", f"{baris['Volume Jual Produk (1 Jam)']:,.0f}/jam", baris['Status Volume Jual'])
+            c4.metric("Vol Jual/Jam", f"{baris['Volume Jual Produk (1 Jam)']:,.0f}")
+            c5.metric("Vol Jual/Hari", f"{baris['Volume Jual Produk (24 Jam)']:,.0f}")
         else:
             st.info("Tidak ada resep yang cocok dengan filter saat ini.")
 
