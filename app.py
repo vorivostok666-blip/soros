@@ -498,8 +498,13 @@ if halaman == "🎯 Shock Dip Radar":
             # diubah dulu jadi PERINGKAT PERSENTIL (0-100, item tertinggi = 100),
             # baru dirata-rata. Item yang kuat di KEDUA metrik otomatis dapat skor
             # tertinggi. Klik header kolom "Skor Gabungan" di tabel buat urutkan.
-            rank_vol_harian = res_spread['D_VolLow'].rank(pct=True, na_option='bottom')
-            rank_vol_lonjakan = res_spread['Rasio_Volume_5m'].rank(pct=True, na_option='bottom')
+            # Peringkat Vol Harian dihitung dari SEMUA item (data ini selalu ada, tidak
+            # ada yang "belum dicek"). Peringkat lonjakan Volume dihitung HANYA dari
+            # item yang beneran sudah dicek -- item yang belum dicek (NaN) TIDAK diberi
+            # peringkat sama sekali (bukan dianggap "terburuk"), supaya Skor Gabungan
+            # cuma keluar kalau kedua datanya beneran ada, bukan asumsi kasar.
+            rank_vol_harian = res_spread['D_VolLow'].rank(pct=True)
+            rank_vol_lonjakan = res_spread['Rasio_Volume_5m'].rank(pct=True)  # NaN tetap NaN, tidak dipaksa
             res_spread['Skor_Gabungan'] = ((rank_vol_harian + rank_vol_lonjakan) / 2 * 100).round(1)
 
             if len(res_spread) > n_cek:
@@ -508,7 +513,9 @@ if halaman == "🎯 Shock Dip Radar":
             st.caption(
                 "🎯 **Skor Gabungan** (0-100) = rangking Vol Harian + lonjakan Volume digabung jadi satu "
                 "angka. Klik header kolomnya di tabel untuk urutkan dari yang paling kuat di KEDUA metrik "
-                "sekaligus — bukan cuma salah satu."
+                "sekaligus. Item dengan Volume **⏳ Belum dicek** akan kosong (bukan diberi angka asal) "
+                "karena datanya memang belum lengkap — naikkan 'Batas Keamanan Cek Volume' di sidebar "
+                "kalau mau item itu ikut dapat skor."
             )
 
             res_spread_display = res_spread.rename(columns={
