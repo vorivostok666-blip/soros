@@ -6,6 +6,7 @@ import altair as alt
 import numpy as np
 import math
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Konfigurasi Tampilan Halaman Web (Responsif untuk HP)
 st.set_page_config(page_title="OSRS Global Flipping Radar", layout="wide")
@@ -373,29 +374,36 @@ if halaman == "🎯 Shock Dip Radar":
                 total_kandidat = len(kandidat_shock)
                 progress_bar = st.progress(0, text="Memverifikasi histori harga 14 hari...")
 
-                for idx, (_, row) in enumerate(kandidat_shock.iterrows()):
-                    v = fetch_dip_verification(int(row['id']))
-                    progress_bar.progress(
-                        (idx + 1) / total_kandidat,
-                        text=f"Memverifikasi {row['mappingname']} ({idx + 1}/{total_kandidat})..."
-                    )
-                    time.sleep(0.15)  # jeda kecil antar item, biar tidak membebani/kena limit API wiki
+                # Dicek PARALEL (8 sekaligus) alih-alih satu-satu berurutan -- ini yang
+                # bikin scan jauh lebih cepat. 8 dipilih supaya tetap sopan ke API wiki
+                # (gak nembak ratusan koneksi bersamaan), bukan soal batasan Streamlit.
+                selesai = 0
+                with ThreadPoolExecutor(max_workers=8) as executor:
+                    future_ke_row = {executor.submit(fetch_dip_verification, int(row['id'])): row for _, row in kandidat_shock.iterrows()}
+                    for future in as_completed(future_ke_row):
+                        row = future_ke_row[future]
+                        v = future.result()
+                        selesai += 1
+                        progress_bar.progress(
+                            selesai / total_kandidat,
+                            text=f"Memverifikasi {row['mappingname']} ({selesai}/{total_kandidat})..."
+                        )
 
-                    lolos_biweekly = (v['biweekly_floor'] is not None) and (row['Live_Low'] < v['biweekly_floor'])
-                    lolos_likuiditas = (v['daily_median_vol_low'] > 0 and v['daily_median_vol_high'] > 0)
-                    lolos_profit_min = row['Total_Untung_Slot'] >= min_profit_total
-                    lolos_semua = lolos_biweekly and lolos_likuiditas and lolos_profit_min
+                        lolos_biweekly = (v['biweekly_floor'] is not None) and (row['Live_Low'] < v['biweekly_floor'])
+                        lolos_likuiditas = (v['daily_median_vol_low'] > 0 and v['daily_median_vol_high'] > 0)
+                        lolos_profit_min = row['Total_Untung_Slot'] >= min_profit_total
+                        lolos_semua = lolos_biweekly and lolos_likuiditas and lolos_profit_min
 
-                    log_diagnostik.append({
-                        'Nama Barang': row['mappingname'],
-                        'Harga Skrg': row['Live_Low'],
-                        'Floor 14 Hari': round(v['biweekly_floor']) if v['biweekly_floor'] is not None else None,
-                        '14 Hari?': '✅' if lolos_biweekly else '❌',
-                        'Likuid?': '✅' if lolos_likuiditas else '❌',
-                        'Profit Min?': '✅' if lolos_profit_min else '❌',
-                        'Status': '🟢 LOLOS' if lolos_semua else '⛔ Gagal',
-                        'Error API': v['error'] if v['error'] else '-'
-                    })
+                        log_diagnostik.append({
+                            'Nama Barang': row['mappingname'],
+                            'Harga Skrg': row['Live_Low'],
+                            'Floor 14 Hari': round(v['biweekly_floor']) if v['biweekly_floor'] is not None else None,
+                            '14 Hari?': '✅' if lolos_biweekly else '❌',
+                            'Likuid?': '✅' if lolos_likuiditas else '❌',
+                            'Profit Min?': '✅' if lolos_profit_min else '❌',
+                            'Status': '🟢 LOLOS' if lolos_semua else '⛔ Gagal',
+                            'Error API': v['error'] if v['error'] else '-'
+                        })
 
                     if lolos_semua:
                         hasil_verifikasi.append(row)
@@ -469,15 +477,23 @@ if halaman == "🎯 Shock Dip Radar":
             # di sidebar (bukan pembatasan sengaja, cuma jaga app gak macet/timeout
             # kalau kandidatnya ratusan item -- tiap item butuh 1 panggilan API terpisah).
             n_cek = min(int(vol_cek_limit), len(res_spread))
-            rasio_granular = []
+            hasil_map_vol = {}
             if n_cek > 0:
+                kandidat_vol = res_spread.head(n_cek)
                 prog_vol2 = st.progress(0, text=f"Mengecek volume granular Tabel 2 (0/{n_cek})...")
-                for i, (_, row) in enumerate(res_spread.head(n_cek).iterrows()):
-                    rasio_granular.append(fetch_recent_volume_ratio(int(row['id'])))
-                    prog_vol2.progress((i + 1) / n_cek, text=f"Cek volume: {row['mappingname']} ({i + 1}/{n_cek})")
-                    time.sleep(0.12)
+                selesai_vol = 0
+                # Dicek PARALEL (8 sekaligus) alih-alih satu-satu berurutan -- jauh lebih
+                # cepat. Hasil dipetakan balik pakai ID item (bukan urutan selesai),
+                # karena hasil paralel gak selalu balik sesuai urutan kirim.
+                with ThreadPoolExecutor(max_workers=8) as executor:
+                    future_ke_info = {executor.submit(fetch_recent_volume_ratio, int(row['id'])): (int(row['id']), row['mappingname']) for _, row in kandidat_vol.iterrows()}
+                    for future in as_completed(future_ke_info):
+                        item_id, nama = future_ke_info[future]
+                        hasil_map_vol[item_id] = future.result()
+                        selesai_vol += 1
+                        prog_vol2.progress(selesai_vol / n_cek, text=f"Cek volume: {nama} ({selesai_vol}/{n_cek})")
                 prog_vol2.empty()
-            rasio_granular += [None] * (len(res_spread) - n_cek)
+            rasio_granular = [hasil_map_vol.get(int(row['id']), None) for _, row in res_spread.iterrows()]
             res_spread = res_spread.copy()
             res_spread['Rasio_Volume_5m'] = rasio_granular
 
