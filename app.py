@@ -378,7 +378,7 @@ if halaman == "🎯 Shock Dip Radar":
                 # bikin scan jauh lebih cepat. 8 dipilih supaya tetap sopan ke API wiki
                 # (gak nembak ratusan koneksi bersamaan), bukan soal batasan Streamlit.
                 selesai = 0
-                with ThreadPoolExecutor(max_workers=8) as executor:
+                with ThreadPoolExecutor(max_workers=12) as executor:
                     future_ke_row = {executor.submit(fetch_dip_verification, int(row['id'])): row for _, row in kandidat_shock.iterrows()}
                     for future in as_completed(future_ke_row):
                         row = future_ke_row[future]
@@ -485,7 +485,7 @@ if halaman == "🎯 Shock Dip Radar":
                 # Dicek PARALEL (8 sekaligus) alih-alih satu-satu berurutan -- jauh lebih
                 # cepat. Hasil dipetakan balik pakai ID item (bukan urutan selesai),
                 # karena hasil paralel gak selalu balik sesuai urutan kirim.
-                with ThreadPoolExecutor(max_workers=8) as executor:
+                with ThreadPoolExecutor(max_workers=12) as executor:
                     future_ke_info = {executor.submit(fetch_recent_volume_ratio, int(row['id'])): (int(row['id']), row['mappingname']) for _, row in kandidat_vol.iterrows()}
                     for future in as_completed(future_ke_info):
                         item_id, nama = future_ke_info[future]
@@ -875,6 +875,16 @@ else:
 
         roi_persen = (untung_low / modal_per_eksekusi * 100) if modal_per_eksekusi > 0 else 0
 
+        # --- Rasio Volume/Untung: seberapa besar volume pasar per 1000 GP untung ---
+        # Makin TINGGI rasio ini, makin banyak volume transaksi yang mendukung tiap
+        # 1000 GP potensi untung -- artinya lebih aman/gampang dijual. Makin RENDAH
+        # (mendekati 0), berarti untungnya besar tapi volumenya tipis -- untungnya
+        # kelihatan bagus di atas kertas, tapi bisa susah/lama buat benar-benar dijual.
+        if untung_high > 0:
+            rasio_vol_profit = round((vol_produk_1h / untung_high) * 1000, 3)
+        else:
+            rasio_vol_profit = None
+
         hasil_rows.append({
             'Produk': nama_produk,
             'Metode': tipe_resep,
@@ -887,6 +897,7 @@ else:
             'Volume Jual Produk (1 Jam)': round(vol_produk_1h),
             'Volume Jual Produk (24 Jam)': round(vol_produk_24h),
             'Status Volume Jual': status_vol_produk,
+            'Rasio Volume/Untung (per 1000 GP)': rasio_vol_profit,
             '_ingredients': ingredient_detail,
             '_qty_produced': qty_produced,
         })
@@ -941,11 +952,13 @@ else:
             "likuiditas bahan, bukan cuma margin per unit. 'Untung/Eksekusi (Low/High)' = profit SEKALI proses "
             "kalau produk terjual di harga Low (cepat) atau High (lebih untung, lebih lama). Kolom "
             "**Volume Jual Produk (1 Jam)** & **(24 Jam)** = angka asli transaksi produk JADINYA (bukan bahan) "
-            "dalam 1 jam & 24 jam terakhir — kalau kecil, hati-hati: hasil produksimu bisa numpuk lama "
-            "sebelum laku, meski marginnya kelihatan bagus di atas kertas."
+            "dalam 1 jam & 24 jam terakhir. Kolom **Rasio Volume/Untung** = volume per 1000 GP untung — "
+            "makin TINGGI makin aman (banyak pembeli mendukung untungnya), makin RENDAH (dekat 0) berarti "
+            "untungnya besar tapi pasarnya tipis, bisa numpuk lama sebelum laku meski kelihatan bagus di atas kertas."
         )
         st.dataframe(
-            df_tampil[['Produk', 'Metode', 'Syarat', 'Bisa Dijalankan?', 'Volume Jual Produk (1 Jam)', 'Volume Jual Produk (24 Jam)', 'Modal/Eksekusi',
+            df_tampil[['Produk', 'Metode', 'Syarat', 'Bisa Dijalankan?', 'Volume Jual Produk (1 Jam)', 'Volume Jual Produk (24 Jam)',
+                       'Rasio Volume/Untung (per 1000 GP)', 'Modal/Eksekusi',
                        'Untung/Eksekusi (Low)', 'Untung/Eksekusi (High)', 'Maks Eksekusi Realistis',
                        'Profit Realistis (Low)', 'Profit Realistis (High)', 'ROI (%)']],
             use_container_width=True
