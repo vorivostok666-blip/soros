@@ -154,10 +154,30 @@ if halaman == "🎯 Shock Dip Radar":
     # (median volume > 0) supaya tidak menjebak barang yang jarang diperdagangkan.
     # ==========================================
     @st.cache_data(ttl=600)
+    # ==========================================
+    # VERIFIKASI SHOCK DIP (metodologi poignanttech.com —
+    # "Virtual Markets Part Four: Shocks and Dip Detection")
+    #
+    # Prinsip: dip "recency" saja (1 jam) tidak cukup, karena bisa jadi cuma
+    # pantulan balik dari spike (contoh kasus: Infinity Hat, Antidote++ di
+    # artikel aslinya). Untuk memastikan ini shock dip beneran, harga sekarang
+    # harus lebih rendah dari titik TERENDAH yang pernah tercatat dalam:
+    #   - 14 hari terakhir (granularitas per jam)  -> "biweekly floor"
+    #   - 30 hari terakhir (granularitas per hari) -> "monthly floor"
+    # Ditambah cek likuiditas (median volume > 0) supaya tidak menjebak
+    # barang yang jarang diperdagangkan. Dua panggilan API (1h & 24h) di bawah
+    # sengaja independen -- kalau satu gagal, yang lain tetap bisa dipakai.
+    # Fungsi ini dipanggil PARALEL (lihat ThreadPoolExecutor di bawah) supaya
+    # tetap cepat meski tiap item butuh 2 panggilan API.
+    # ==========================================
+    @st.cache_data(ttl=600)
     def fetch_dip_verification(item_id):
         headers = {'User-Agent': 'Belajar_Data_Analisis_Bot_Lokal'}
         hasil = {
             'biweekly_floor': None,
+            'monthly_floor': None,
+            'monthly_median_vol_low': 0,
+            'monthly_median_vol_high': 0,
             'daily_median_vol_low': 0,
             'daily_median_vol_high': 0,
             'error': None
@@ -186,6 +206,28 @@ if halaman == "🎯 Shock Dip Radar":
                 errors.append("1h: respons API kosong")
         except Exception as e:
             errors.append(f"1h: {type(e).__name__}")
+
+        # --- Histori per hari, ambil 30 hari terakhir (monthly floor) ---
+        try:
+            url_24h = f"https://prices.runescape.wiki/api/v1/osrs/timeseries?timestep=24h&id={item_id}"
+            resp_24h = requests.get(url_24h, headers=headers, timeout=15)
+            resp_24h.raise_for_status()
+            data_24h = resp_24h.json().get('data', [])
+            if data_24h:
+                df24h = pd.DataFrame(data_24h).tail(30)
+                for c in num_cols:
+                    if c in df24h.columns:
+                        df24h[c] = pd.to_numeric(df24h[c], errors='coerce')
+                min_high = df24h['avgHighPrice'].min(skipna=True) if 'avgHighPrice' in df24h else None
+                min_low = df24h['avgLowPrice'].min(skipna=True) if 'avgLowPrice' in df24h else None
+                if pd.notna(min_high) and pd.notna(min_low):
+                    hasil['monthly_floor'] = (min_high + min_low) / 2.0
+                hasil['monthly_median_vol_low'] = float(df24h['lowPriceVolume'].median(skipna=True) or 0) if 'lowPriceVolume' in df24h else 0
+                hasil['monthly_median_vol_high'] = float(df24h['highPriceVolume'].median(skipna=True) or 0) if 'highPriceVolume' in df24h else 0
+            else:
+                errors.append("24h: respons API kosong")
+        except Exception as e:
+            errors.append(f"24h: {type(e).__name__}")
 
         hasil['error'] = "; ".join(errors) if errors else None
         return hasil
@@ -264,11 +306,11 @@ if halaman == "🎯 Shock Dip Radar":
     st.sidebar.info(f"💰 Modal per Slot ({jumlah_slot} Slot): **{modal_per_slot:,.0f} GP**")
 
     st.sidebar.header("🔬 Verifikasi Shock Dip (Tabel 1)")
-    st.sidebar.caption("Berdasarkan metodologi poignanttech.com — cek dip terhadap harga terendah 14 hari terakhir, bukan cuma rata-rata 24 jam.")
+    st.sidebar.caption("Berdasarkan metodologi poignanttech.com — cek dip terhadap harga terendah 14 & 30 hari terakhir, bukan cuma rata-rata 24 jam.")
     aktifkan_verifikasi_dalam = st.sidebar.checkbox(
-        "Aktifkan Verifikasi Historis (14 Hari)",
+        "Aktifkan Verifikasi Historis (14/30 Hari)",
         value=True,
-        help="Mengecek ulang tiap kandidat dip terhadap harga terendah historis 14 hari (per jam) via API timeseries wiki OSRS. Ini menyaring 'dip palsu' yang sebenarnya cuma pantulan balik dari spike. Menambah waktu pindai karena butuh 1 panggilan API tambahan per item."
+        help="Mengecek ulang tiap kandidat dip terhadap harga terendah historis 14 hari (per jam) & 30 hari (per hari) via API timeseries wiki OSRS. Ini menyaring 'dip palsu' yang sebenarnya cuma pantulan balik dari spike. Butuh 2 panggilan API per item, tapi dijalankan paralel jadi tetap cepat."
     )
     max_kandidat_verifikasi = st.sidebar.number_input(
         "Maks. Kandidat Diverifikasi", min_value=5, max_value=100, value=25, step=5,
@@ -345,10 +387,10 @@ if halaman == "🎯 Shock Dip Radar":
         # pantulan balik dari spike. Metodologi: poignanttech.com
         # "Virtual Markets Part Four: Shocks and Dip Detection" (versi 14 hari saja).
         # ==========================================
-        st.subheader("🛡️ Tabel 1: Verified Shock Dips (14 Hari)")
+        st.subheader("🛡️ Tabel 1: Verified Shock Dips (14 & 30 Hari)")
         st.write(
             "Item yang harganya baru saja anjlok (dibanding rata-rata 1 jam terakhir) DAN sudah "
-            "diverifikasi: harga sekarang lebih rendah dari titik TERENDAH 14 hari terakhir. Ini "
+            "diverifikasi: harga sekarang lebih rendah dari titik TERENDAH 14 HARI dan 30 HARI terakhir. Ini "
             "menyaring dip 'bekas spike' yang cuma kembali normal, bukan shock beneran."
         )
 
@@ -390,23 +432,29 @@ if halaman == "🎯 Shock Dip Radar":
                         )
 
                         lolos_biweekly = (v['biweekly_floor'] is not None) and (row['Live_Low'] < v['biweekly_floor'])
-                        lolos_likuiditas = (v['daily_median_vol_low'] > 0 and v['daily_median_vol_high'] > 0)
+                        lolos_monthly = (v['monthly_floor'] is not None) and (row['Live_Low'] < v['monthly_floor'])
+                        lolos_likuiditas = (
+                            v['daily_median_vol_low'] > 0 and v['daily_median_vol_high'] > 0 and
+                            v['monthly_median_vol_low'] > 0 and v['monthly_median_vol_high'] > 0
+                        )
                         lolos_profit_min = row['Total_Untung_Slot'] >= min_profit_total
-                        lolos_semua = lolos_biweekly and lolos_likuiditas and lolos_profit_min
+                        lolos_semua = lolos_biweekly and lolos_monthly and lolos_likuiditas and lolos_profit_min
 
                         log_diagnostik.append({
                             'Nama Barang': row['mappingname'],
                             'Harga Skrg': row['Live_Low'],
                             'Floor 14 Hari': round(v['biweekly_floor']) if v['biweekly_floor'] is not None else None,
+                            'Floor 30 Hari': round(v['monthly_floor']) if v['monthly_floor'] is not None else None,
                             '14 Hari?': '✅' if lolos_biweekly else '❌',
+                            '30 Hari?': '✅' if lolos_monthly else '❌',
                             'Likuid?': '✅' if lolos_likuiditas else '❌',
                             'Profit Min?': '✅' if lolos_profit_min else '❌',
                             'Status': '🟢 LOLOS' if lolos_semua else '⛔ Gagal',
                             'Error API': v['error'] if v['error'] else '-'
                         })
 
-                    if lolos_semua:
-                        hasil_verifikasi.append(row)
+                        if lolos_semua:
+                            hasil_verifikasi.append(row)
 
                 progress_bar.empty()
 
@@ -418,26 +466,26 @@ if halaman == "🎯 Shock Dip Radar":
                         'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian',
                         'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga'
                     })
-                    st.success(f"✅ {len(df_verified)} item lolos verifikasi shock dip 14 hari!")
+                    st.success(f"✅ {len(df_verified)} item lolos verifikasi shock dip 14 & 30 hari!")
                     st.dataframe(
                         df_verified[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']],
                         use_container_width=True
                     )
                 else:
-                    st.info("💡 Tidak ada kandidat yang lolos verifikasi historis 14 hari saat ini. Coba lagi nanti, atau turunkan ambang profit minimum / naikkan jumlah kandidat di sidebar.")
+                    st.info("💡 Tidak ada kandidat yang lolos verifikasi historis 14/30 hari saat ini. Coba lagi nanti, atau turunkan ambang profit minimum / naikkan jumlah kandidat di sidebar.")
 
                 with st.expander(f"🔍 Detail Diagnostik ({total_kandidat} kandidat diperiksa) — cek di sini kalau tabel di atas kosong"):
                     st.caption(
                         "Kalau kolom 'Error API' terisi untuk banyak baris, berarti tabel kosong karena masalah "
-                        "koneksi/API — coba lagi nanti. Kalau 'Error API' kosong tapi tetap ❌ di kolom 14 Hari, "
-                        "berarti memang belum ada shock dip beneran saat ini (bukan bug) — item cuma turun dalam "
-                        "konteks jangka pendek, tapi belum memecahkan rekor terendah 14 hari."
+                        "koneksi/API — coba lagi nanti. Kalau 'Error API' kosong tapi tetap ❌ di kolom 14 Hari "
+                        "atau 30 Hari, berarti memang belum ada shock dip beneran saat ini (bukan bug) — item cuma "
+                        "turun dalam konteks jangka pendek, tapi belum memecahkan rekor terendah 14 ATAU 30 hari."
                     )
                     st.dataframe(pd.DataFrame(log_diagnostik), use_container_width=True)
             else:
                 st.info("💡 Tidak ada kandidat yang sedang anjlok untuk diverifikasi saat ini.")
         else:
-            st.info("🔕 Verifikasi shock dip sedang dimatikan. Aktifkan di sidebar untuk memfilter dip palsu (bekas spike) menggunakan histori harga 14 hari.")
+            st.info("🔕 Verifikasi shock dip sedang dimatikan. Aktifkan di sidebar untuk memfilter dip palsu (bekas spike) menggunakan histori harga 14/30 hari.")
 
         st.divider()
 
