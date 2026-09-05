@@ -104,7 +104,7 @@ st.sidebar.divider()
 
 if halaman == "🎯 Shock Dip Radar":
     st.title("⭐ OSRS Global Flipping Radar")
-    st.write("Sinyal *trading* otomatis untuk **SEMUA ITEM OSRS (F2P & Member)** dengan 2 Radar Terpisah & Dual Chart.")
+    st.write("Sinyal *trading* otomatis untuk **SEMUA ITEM OSRS (F2P & Member)** dengan Radar Verified Shock Dips & Dual Chart.")
     st.caption(
         "ℹ️ Kolom **Maks Beli (BEP)** = batas harga beli tertinggi sebelum kamu balik modal (breakeven), "
         "dihitung dari Harga Jual dikurangi Pajak GE. Kalau kamu naikkan harga beli untuk mempercepat fill, "
@@ -233,36 +233,6 @@ if halaman == "🎯 Shock Dip Radar":
         return hasil
 
     # ==========================================
-    # CEK VOLUME GRANULAR (5 MENIT) PER ITEM
-    # Lebih presisi dari perkiraan kasar (1 jam vs rata-rata harian) karena
-    # membandingkan periode 5 menit TERAKHIR dengan rata-rata 6 periode 5 menit
-    # sebelumnya -- sama persis logikanya dengan indikator di Dual Chart.
-    # Trade-off: 1 panggilan API tambahan per item yang dicek.
-    # ==========================================
-    @st.cache_data(ttl=120)
-    def fetch_recent_volume_ratio(item_id):
-        headers = {'User-Agent': 'Belajar_Data_Analisis_Bot_Lokal'}
-        try:
-            url = f"https://prices.runescape.wiki/api/v1/osrs/timeseries?timestep=5m&id={item_id}"
-            resp = requests.get(url, headers=headers, timeout=10)
-            resp.raise_for_status()
-            data = resp.json().get('data', [])
-            if len(data) < 3:
-                return None
-            df_v = pd.DataFrame(data).tail(7)
-            for c in ['lowPriceVolume', 'highPriceVolume']:
-                if c in df_v.columns:
-                    df_v[c] = pd.to_numeric(df_v[c], errors='coerce').fillna(0)
-                else:
-                    df_v[c] = 0
-            df_v['Total_Vol'] = df_v['lowPriceVolume'] + df_v['highPriceVolume']
-            vol_now = df_v['Total_Vol'].iloc[-1]
-            vol_baseline = df_v['Total_Vol'].iloc[:-1].mean()
-            return (vol_now / vol_baseline) if vol_baseline > 0 else None
-        except Exception:
-            return None
-
-    # ==========================================
     # AUTO-REFRESH (5 MENIT) & TOMBOL REFRESH MANUAL
     # ==========================================
     st.session_state['last_update'] = time.time()
@@ -319,15 +289,6 @@ if halaman == "🎯 Shock Dip Radar":
     min_profit_total = st.sidebar.number_input(
         "Min. Profit Total per Slot (GP)", min_value=0, value=5000, step=1000,
         help="Item dengan potensi untung per slot di bawah angka ini akan disaring dari Tabel 1 (Verified Shock Dips)."
-    )
-
-    st.sidebar.header("📊 Cek Volume Granular (Tabel 2)")
-    vol_cek_limit = st.sidebar.number_input(
-        "Batas Keamanan Cek Volume", min_value=0, max_value=500, value=200, step=25,
-        help="Tabel 2 mengecek volume 5-menit granular (1 API call per item) untuk SEMUA item di "
-             "tabel, sampai batas ini. Ini bukan pembatasan yang disengaja — cuma pengaman teknis "
-             "biar app tidak macet/timeout kalau kandidatnya sampai ratusan item (tiap item butuh "
-             "1 panggilan API terpisah). Naikkan kalau mau lebih lengkap, tapi scan jadi lebih lambat."
     )
 
     st.sidebar.caption("💡 Data di-cache 60 detik — klik tombol di bawah kapan pun kamu mau data terbaru.")
@@ -489,112 +450,6 @@ if halaman == "🎯 Shock Dip Radar":
 
         st.divider()
 
-        # ==========================================
-        # TABEL 2: METODE HIGH-LOW SPREAD + LONJAKAN VOLUME
-        # Beda dari Tabel 1 (berbasis histori/dip), tabel ini murni bandingin selisih
-        # harga SEKARANG: beli di Live_Low, jual di Live_High. Ditambah cek volume
-        # granular 5-menit buat konfirmasi ada aktivitas jual-beli nyata di balik
-        # celah harganya, bukan cuma order book yang sepi.
-        # ==========================================
-        st.subheader("↔️ Tabel 2: Metode High-Low Spread")
-        st.write(
-            "Beda dari Tabel 1 (berbasis histori/dip), tabel ini murni bandingin **selisih harga saat ini** "
-            "— beli di harga Low, langsung jual di harga High. Cocok buat item yang memang selalu punya celah "
-            "harga lebar (bukan cuma pas lagi anjlok mendadak)."
-        )
-        st.caption(
-            "📊 Kolom **Volume** = volume transaksi 5 menit TERAKHIR dibanding rata-rata 6 "
-            "periode 5-menit sebelumnya (data granular per item, bukan perkiraan kasar). "
-            "🚀 Lonjakan! (≥2x) = banyak orang jual/beli bareng, makin meyakinkan celah harganya real. "
-            "⏳ Belum dicek = item ini berada di luar batas keamanan API (atur di sidebar) — bukan "
-            "sengaja dilewati, cuma pengaman biar app gak macet kalau kandidatnya ratusan item."
-        )
-
-        df_spread = master_data[
-            (master_data['Live_Low'] > 0) &
-            (master_data['Live_High'] > 0)
-        ].copy()
-        df_spread['Tax_Spread'] = df_spread['Live_High'].apply(calc_ge_tax)
-        df_spread['Untung_Per_Biji'] = df_spread['Live_High'] - df_spread['Live_Low'] - df_spread['Tax_Spread']
-        df_spread = df_spread[df_spread['Untung_Per_Biji'] > 0]
-
-        if not df_spread.empty:
-            res_spread = apply_safety_lock(df_spread, kolom_jual='Live_High').sort_values(by='Total_Untung_Slot', ascending=False)
-
-            # Cek volume granular (5 menit) untuk SEMUA item, sampai batas keamanan
-            # di sidebar (bukan pembatasan sengaja, cuma jaga app gak macet/timeout
-            # kalau kandidatnya ratusan item -- tiap item butuh 1 panggilan API terpisah).
-            n_cek = min(int(vol_cek_limit), len(res_spread))
-            hasil_map_vol = {}
-            if n_cek > 0:
-                kandidat_vol = res_spread.head(n_cek)
-                prog_vol2 = st.progress(0, text=f"Mengecek volume granular Tabel 2 (0/{n_cek})...")
-                selesai_vol = 0
-                # Dicek PARALEL (8 sekaligus) alih-alih satu-satu berurutan -- jauh lebih
-                # cepat. Hasil dipetakan balik pakai ID item (bukan urutan selesai),
-                # karena hasil paralel gak selalu balik sesuai urutan kirim.
-                with ThreadPoolExecutor(max_workers=12) as executor:
-                    future_ke_info = {executor.submit(fetch_recent_volume_ratio, int(row['id'])): (int(row['id']), row['mappingname']) for _, row in kandidat_vol.iterrows()}
-                    for future in as_completed(future_ke_info):
-                        item_id, nama = future_ke_info[future]
-                        hasil_map_vol[item_id] = future.result()
-                        selesai_vol += 1
-                        prog_vol2.progress(selesai_vol / n_cek, text=f"Cek volume: {nama} ({selesai_vol}/{n_cek})")
-                prog_vol2.empty()
-            rasio_granular = [hasil_map_vol.get(int(row['id']), None) for _, row in res_spread.iterrows()]
-            res_spread = res_spread.copy()
-            res_spread['Rasio_Volume_5m'] = rasio_granular
-
-            def tanda_volume_5m(rasio):
-                if rasio is None or pd.isna(rasio):
-                    return '⏳ Belum dicek'
-                elif rasio >= 2:
-                    return '🚀 Lonjakan!'
-                elif rasio >= 1.2:
-                    return '📈 Naik'
-                else:
-                    return '➖ Normal'
-            res_spread['Tanda_Volume'] = res_spread['Rasio_Volume_5m'].apply(tanda_volume_5m)
-
-            # --- Skor Gabungan: rangking Vol Harian & lonjakan Volume sekaligus ---
-            # Dua metrik ini beda skala jauh (Vol Harian bisa ribuan, rasio lonjakan
-            # cuma sekitar 0-10), jadi gak bisa dijumlah langsung -- masing-masing
-            # diubah dulu jadi PERINGKAT PERSENTIL (0-100, item tertinggi = 100),
-            # baru dirata-rata. Item yang kuat di KEDUA metrik otomatis dapat skor
-            # tertinggi. Klik header kolom "Skor Gabungan" di tabel buat urutkan.
-            # Peringkat Vol Harian dihitung dari SEMUA item (data ini selalu ada, tidak
-            # ada yang "belum dicek"). Peringkat lonjakan Volume dihitung HANYA dari
-            # item yang beneran sudah dicek -- item yang belum dicek (NaN) TIDAK diberi
-            # peringkat sama sekali (bukan dianggap "terburuk"), supaya Skor Gabungan
-            # cuma keluar kalau kedua datanya beneran ada, bukan asumsi kasar.
-            rank_vol_harian = res_spread['D_VolLow'].rank(pct=True)
-            rank_vol_lonjakan = res_spread['Rasio_Volume_5m'].rank(pct=True)  # NaN tetap NaN, tidak dipaksa
-            res_spread['Skor_Gabungan'] = ((rank_vol_harian + rank_vol_lonjakan) / 2 * 100).round(1)
-
-            if len(res_spread) > n_cek:
-                st.warning(f"⚠️ Ada {len(res_spread)} item total, tapi cuma {n_cek} teratas yang dicek volume granularnya (batas keamanan). Naikkan 'Batas Keamanan Cek Volume' di sidebar kalau mau lebih banyak — tapi scan jadi lebih lambat.")
-
-            st.caption(
-                "🎯 **Skor Gabungan** (0-100) = rangking Vol Harian + lonjakan Volume digabung jadi satu "
-                "angka. Klik header kolomnya di tabel untuk urutkan dari yang paling kuat di KEDUA metrik "
-                "sekaligus. Item dengan Volume **⏳ Belum dicek** akan kosong (bukan diberi angka asal) "
-                "karena datanya memang belum lengkap — naikkan 'Batas Keamanan Cek Volume' di sidebar "
-                "kalau mau item itu ikut dapat skor."
-            )
-
-            res_spread_display = res_spread.rename(columns={
-                'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli',
-                'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung', 'ROI_Persen': 'ROI (%)',
-                'D_VolLow': 'Vol Harian', 'Tanda_Volume': 'Volume', 'Skor_Gabungan': 'Skor Gabungan'
-            })
-            st.dataframe(
-                res_spread_display[['Nama Barang', 'Vol Harian', 'Volume', 'Skor Gabungan', 'Harga Beli', 'Jml Beli', 'Pr. Untung', 'ROI (%)']],
-                use_container_width=True
-            )
-        else:
-            st.info("💡 Tidak ada item dengan celah High-Low Spread yang menguntungkan saat ini.")
-
-        st.divider()
 
         # ==========================================
         # DUAL CHART (SEMUA ITEM)
