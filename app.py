@@ -6,7 +6,6 @@ import altair as alt
 import numpy as np
 import math
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Konfigurasi Tampilan Halaman Web (Responsif untuk HP)
 st.set_page_config(page_title="OSRS Global Flipping Radar", layout="wide")
@@ -104,7 +103,7 @@ st.sidebar.divider()
 
 if halaman == "🎯 Shock Dip Radar":
     st.title("⭐ OSRS Global Flipping Radar")
-    st.write("Sinyal *trading* otomatis untuk **SEMUA ITEM OSRS (F2P & Member)** dengan Radar Verified Shock Dips & Dual Chart.")
+    st.write("Sinyal *trading* otomatis untuk **SEMUA ITEM OSRS (F2P & Member)** dengan Radar Dipped Items Report & Dual Chart.")
     st.caption(
         "ℹ️ Kolom **Maks Beli (BEP)** = batas harga beli tertinggi sebelum kamu balik modal (breakeven), "
         "dihitung dari Harga Jual dikurangi Pajak GE. Kalau kamu naikkan harga beli untuk mempercepat fill, "
@@ -135,102 +134,12 @@ if halaman == "🎯 Shock Dip Radar":
                     master[col] = pd.to_numeric(master[col], errors='coerce').fillna(0)
 
             # Hitung Pajak GE (2%, dibatasi maks 5 juta GP per item)
-            master['Tax'] = master['Hourly_Low'].apply(calc_ge_tax)
+            master['Tax'] = master['Daily_Low'].apply(calc_ge_tax)
 
             return master
         except Exception as e:
             st.error(f"Gagal mengambil data API: {e}")
             return pd.DataFrame()
-
-    # ==========================================
-    # VERIFIKASI SHOCK DIP (metodologi poignanttech.com —
-    # "Virtual Markets Part Four: Shocks and Dip Detection")
-    #
-    # Prinsip: dip "recency" saja (1 jam) tidak cukup, karena bisa jadi cuma
-    # pantulan balik dari spike (contoh kasus: Infinity Hat, Antidote++ di
-    # artikel aslinya). Untuk memastikan ini shock dip beneran, harga sekarang
-    # harus lebih rendah dari titik TERENDAH yang pernah tercatat dalam
-    # 14 hari terakhir (granularitas per jam). Ditambah cek likuiditas
-    # (median volume > 0) supaya tidak menjebak barang yang jarang diperdagangkan.
-    # ==========================================
-    @st.cache_data(ttl=600)
-    # ==========================================
-    # VERIFIKASI SHOCK DIP (metodologi poignanttech.com —
-    # "Virtual Markets Part Four: Shocks and Dip Detection")
-    #
-    # Prinsip: dip "recency" saja (1 jam) tidak cukup, karena bisa jadi cuma
-    # pantulan balik dari spike (contoh kasus: Infinity Hat, Antidote++ di
-    # artikel aslinya). Untuk memastikan ini shock dip beneran, harga sekarang
-    # harus lebih rendah dari titik TERENDAH yang pernah tercatat dalam:
-    #   - 14 hari terakhir (granularitas per jam)  -> "biweekly floor"
-    #   - 30 hari terakhir (granularitas per hari) -> "monthly floor"
-    # Ditambah cek likuiditas (median volume > 0) supaya tidak menjebak
-    # barang yang jarang diperdagangkan. Dua panggilan API (1h & 24h) di bawah
-    # sengaja independen -- kalau satu gagal, yang lain tetap bisa dipakai.
-    # Fungsi ini dipanggil PARALEL (lihat ThreadPoolExecutor di bawah) supaya
-    # tetap cepat meski tiap item butuh 2 panggilan API.
-    # ==========================================
-    @st.cache_data(ttl=600)
-    def fetch_dip_verification(item_id):
-        headers = {'User-Agent': 'Belajar_Data_Analisis_Bot_Lokal'}
-        hasil = {
-            'biweekly_floor': None,
-            'monthly_floor': None,
-            'monthly_median_vol_low': 0,
-            'monthly_median_vol_high': 0,
-            'daily_median_vol_low': 0,
-            'daily_median_vol_high': 0,
-            'error': None
-        }
-        num_cols = ['avgHighPrice', 'avgLowPrice', 'highPriceVolume', 'lowPriceVolume']
-        errors = []
-
-        # --- Histori per jam, ambil ~14 hari terakhir (biweekly floor) ---
-        try:
-            url_1h = f"https://prices.runescape.wiki/api/v1/osrs/timeseries?timestep=1h&id={item_id}"
-            resp_1h = requests.get(url_1h, headers=headers, timeout=15)
-            resp_1h.raise_for_status()
-            data_1h = resp_1h.json().get('data', [])
-            if data_1h:
-                df1h = pd.DataFrame(data_1h).tail(14 * 24)
-                for c in num_cols:
-                    if c in df1h.columns:
-                        df1h[c] = pd.to_numeric(df1h[c], errors='coerce')
-                min_high = df1h['avgHighPrice'].min(skipna=True) if 'avgHighPrice' in df1h else None
-                min_low = df1h['avgLowPrice'].min(skipna=True) if 'avgLowPrice' in df1h else None
-                if pd.notna(min_high) and pd.notna(min_low):
-                    hasil['biweekly_floor'] = (min_high + min_low) / 2.0
-                hasil['daily_median_vol_low'] = float(df1h['lowPriceVolume'].tail(24).median(skipna=True) or 0) if 'lowPriceVolume' in df1h else 0
-                hasil['daily_median_vol_high'] = float(df1h['highPriceVolume'].tail(24).median(skipna=True) or 0) if 'highPriceVolume' in df1h else 0
-            else:
-                errors.append("1h: respons API kosong")
-        except Exception as e:
-            errors.append(f"1h: {type(e).__name__}")
-
-        # --- Histori per hari, ambil 30 hari terakhir (monthly floor) ---
-        try:
-            url_24h = f"https://prices.runescape.wiki/api/v1/osrs/timeseries?timestep=24h&id={item_id}"
-            resp_24h = requests.get(url_24h, headers=headers, timeout=15)
-            resp_24h.raise_for_status()
-            data_24h = resp_24h.json().get('data', [])
-            if data_24h:
-                df24h = pd.DataFrame(data_24h).tail(30)
-                for c in num_cols:
-                    if c in df24h.columns:
-                        df24h[c] = pd.to_numeric(df24h[c], errors='coerce')
-                min_high = df24h['avgHighPrice'].min(skipna=True) if 'avgHighPrice' in df24h else None
-                min_low = df24h['avgLowPrice'].min(skipna=True) if 'avgLowPrice' in df24h else None
-                if pd.notna(min_high) and pd.notna(min_low):
-                    hasil['monthly_floor'] = (min_high + min_low) / 2.0
-                hasil['monthly_median_vol_low'] = float(df24h['lowPriceVolume'].median(skipna=True) or 0) if 'lowPriceVolume' in df24h else 0
-                hasil['monthly_median_vol_high'] = float(df24h['highPriceVolume'].median(skipna=True) or 0) if 'highPriceVolume' in df24h else 0
-            else:
-                errors.append("24h: respons API kosong")
-        except Exception as e:
-            errors.append(f"24h: {type(e).__name__}")
-
-        hasil['error'] = "; ".join(errors) if errors else None
-        return hasil
 
     # ==========================================
     # AUTO-REFRESH (5 MENIT) & TOMBOL REFRESH MANUAL
@@ -275,20 +184,11 @@ if halaman == "🎯 Shock Dip Radar":
     modal_per_slot = total_modal / jumlah_slot
     st.sidebar.info(f"💰 Modal per Slot ({jumlah_slot} Slot): **{modal_per_slot:,.0f} GP**")
 
-    st.sidebar.header("🔬 Verifikasi Shock Dip (Tabel 1)")
-    st.sidebar.caption("Berdasarkan metodologi poignanttech.com — cek dip terhadap harga terendah 14 & 30 hari terakhir, bukan cuma rata-rata 24 jam.")
-    aktifkan_verifikasi_dalam = st.sidebar.checkbox(
-        "Aktifkan Verifikasi Historis (14/30 Hari)",
-        value=True,
-        help="Mengecek ulang tiap kandidat dip terhadap harga terendah historis 14 hari (per jam) & 30 hari (per hari) via API timeseries wiki OSRS. Ini menyaring 'dip palsu' yang sebenarnya cuma pantulan balik dari spike. Butuh 2 panggilan API per item, tapi dijalankan paralel jadi tetap cepat."
-    )
-    max_kandidat_verifikasi = st.sidebar.number_input(
-        "Maks. Kandidat Diverifikasi", min_value=5, max_value=100, value=25, step=5,
-        help="Batasi jumlah item yang diverifikasi mendalam (diambil dari kandidat dengan potensi untung tertinggi) supaya pindai tidak terlalu lama & tidak membebani API wiki."
-    )
+    st.sidebar.header("🔥 Filter Dipped Items")
+    st.sidebar.caption("Metodologi disamakan dengan laman resmi poignanttech.com/projects/osrs-dippeditems — bandingkan harga sekarang vs rata-rata Low 24 jam terakhir.")
     min_profit_total = st.sidebar.number_input(
         "Min. Profit Total per Slot (GP)", min_value=0, value=5000, step=1000,
-        help="Item dengan potensi untung per slot di bawah angka ini akan disaring dari Tabel 1 (Verified Shock Dips)."
+        help="Item dengan potensi untung per slot di bawah angka ini akan disaring dari tabel."
     )
 
     st.sidebar.caption("💡 Data di-cache 60 detik — klik tombol di bawah kapan pun kamu mau data terbaru.")
@@ -342,111 +242,46 @@ if halaman == "🎯 Shock Dip Radar":
             return df
 
         # ==========================================
-        # TABEL 1: VERIFIED SHOCK DIPS (14 HARI)
-        # Konsolidasi deteksi awal (recency 1 jam) + verifikasi historis 14 hari,
-        # supaya cuma shock dip yang beneran valid yang tampil -- bukan cuma
-        # pantulan balik dari spike. Metodologi: poignanttech.com
-        # "Virtual Markets Part Four: Shocks and Dip Detection" (versi 14 hari saja).
+        # TABEL 1: DIPPED ITEMS REPORT
+        # Disamakan dengan laman resmi poignanttech.com/projects/osrs-dippeditems:
+        # bandingkan harga SEKARANG (Live_Low) terhadap rata-rata Low 24 JAM
+        # terakhir (Daily_Low, dari mereka disebut "AvgLow") -- bukan histori
+        # 14/30 hari. Profitabilitas mempertimbangkan volume, buy limit, & pajak,
+        # persis seperti dijelaskan di laman report mereka.
         # ==========================================
-        st.subheader("🛡️ Tabel 1: Verified Shock Dips (14 & 30 Hari)")
+        st.subheader("🔥 Tabel 1: Dipped Items Report")
         st.write(
-            "Item yang harganya baru saja anjlok (dibanding rata-rata 1 jam terakhir) DAN sudah "
-            "diverifikasi: harga sekarang lebih rendah dari titik TERENDAH 14 HARI dan 30 HARI terakhir. Ini "
-            "menyaring dip 'bekas spike' yang cuma kembali normal, bukan shock beneran."
+            "Item yang harga SEKARANG-nya lebih rendah dari rata-rata harga Low 24 jam terakhir "
+            "(disebut 'AvgLow' di laman report resmi poignanttech.com) — metodologi yang sama "
+            "dengan [OSRS Dipped Items Report](https://poignanttech.com/projects/osrs-dippeditems/) mereka."
         )
 
         df_kandidat = master_data[
             (master_data['Live_Low'] > 0) &
-            (master_data['Hourly_Low'] > (master_data['Live_Low'] * 1.005)) &
-            (((master_data['Daily_Low'] + master_data['Daily_High']) / 2.0) > master_data['Live_Low']) &
-            ((master_data['Hourly_Low'] - master_data['Live_Low'] - master_data['Tax']) > 0)
+            (master_data['Daily_Low'] > master_data['Live_Low']) &
+            ((master_data['Daily_Low'] - master_data['Live_Low'] - master_data['Tax']) > 0)
         ].copy()
 
         if not df_kandidat.empty:
-            df_kandidat['Untung_Per_Biji'] = df_kandidat['Hourly_Low'] - df_kandidat['Live_Low'] - df_kandidat['Tax']
-            res_kandidat = apply_safety_lock(df_kandidat).sort_values(by='Total_Untung_Slot', ascending=False)
+            df_kandidat['Untung_Per_Biji'] = df_kandidat['Daily_Low'] - df_kandidat['Live_Low'] - df_kandidat['Tax']
+            res_kandidat = apply_safety_lock(df_kandidat, kolom_jual='Daily_Low').sort_values(by='Total_Untung_Slot', ascending=False)
+            res_kandidat = res_kandidat[res_kandidat['Total_Untung_Slot'] >= min_profit_total]
         else:
             res_kandidat = pd.DataFrame()
 
-        if aktifkan_verifikasi_dalam:
-            if not res_kandidat.empty:
-                kandidat_shock = res_kandidat.head(int(max_kandidat_verifikasi))
-
-                hasil_verifikasi = []
-                log_diagnostik = []
-                total_kandidat = len(kandidat_shock)
-                progress_bar = st.progress(0, text="Memverifikasi histori harga 14 hari...")
-
-                # Dicek PARALEL (8 sekaligus) alih-alih satu-satu berurutan -- ini yang
-                # bikin scan jauh lebih cepat. 8 dipilih supaya tetap sopan ke API wiki
-                # (gak nembak ratusan koneksi bersamaan), bukan soal batasan Streamlit.
-                selesai = 0
-                with ThreadPoolExecutor(max_workers=12) as executor:
-                    future_ke_row = {executor.submit(fetch_dip_verification, int(row['id'])): row for _, row in kandidat_shock.iterrows()}
-                    for future in as_completed(future_ke_row):
-                        row = future_ke_row[future]
-                        v = future.result()
-                        selesai += 1
-                        progress_bar.progress(
-                            selesai / total_kandidat,
-                            text=f"Memverifikasi {row['mappingname']} ({selesai}/{total_kandidat})..."
-                        )
-
-                        lolos_biweekly = (v['biweekly_floor'] is not None) and (row['Live_Low'] < v['biweekly_floor'])
-                        lolos_monthly = (v['monthly_floor'] is not None) and (row['Live_Low'] < v['monthly_floor'])
-                        lolos_likuiditas = (
-                            v['daily_median_vol_low'] > 0 and v['daily_median_vol_high'] > 0 and
-                            v['monthly_median_vol_low'] > 0 and v['monthly_median_vol_high'] > 0
-                        )
-                        lolos_profit_min = row['Total_Untung_Slot'] >= min_profit_total
-                        lolos_semua = lolos_biweekly and lolos_monthly and lolos_likuiditas and lolos_profit_min
-
-                        log_diagnostik.append({
-                            'Nama Barang': row['mappingname'],
-                            'Harga Skrg': row['Live_Low'],
-                            'Floor 14 Hari': round(v['biweekly_floor']) if v['biweekly_floor'] is not None else None,
-                            'Floor 30 Hari': round(v['monthly_floor']) if v['monthly_floor'] is not None else None,
-                            '14 Hari?': '✅' if lolos_biweekly else '❌',
-                            '30 Hari?': '✅' if lolos_monthly else '❌',
-                            'Likuid?': '✅' if lolos_likuiditas else '❌',
-                            'Profit Min?': '✅' if lolos_profit_min else '❌',
-                            'Status': '🟢 LOLOS' if lolos_semua else '⛔ Gagal',
-                            'Error API': v['error'] if v['error'] else '-'
-                        })
-
-                        if lolos_semua:
-                            hasil_verifikasi.append(row)
-
-                progress_bar.empty()
-
-                if hasil_verifikasi:
-                    df_verified = pd.DataFrame(hasil_verifikasi).sort_values(by='Total_Untung_Slot', ascending=False)
-                    df_verified = df_verified.rename(columns={
-                        'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Hourly_Low': 'Harga Jual',
-                        'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung',
-                        'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian',
-                        'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga'
-                    })
-                    st.success(f"✅ {len(df_verified)} item lolos verifikasi shock dip 14 & 30 hari!")
-                    st.dataframe(
-                        df_verified[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'Harga Jual', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']],
-                        use_container_width=True
-                    )
-                else:
-                    st.info("💡 Tidak ada kandidat yang lolos verifikasi historis 14/30 hari saat ini. Coba lagi nanti, atau turunkan ambang profit minimum / naikkan jumlah kandidat di sidebar.")
-
-                with st.expander(f"🔍 Detail Diagnostik ({total_kandidat} kandidat diperiksa) — cek di sini kalau tabel di atas kosong"):
-                    st.caption(
-                        "Kalau kolom 'Error API' terisi untuk banyak baris, berarti tabel kosong karena masalah "
-                        "koneksi/API — coba lagi nanti. Kalau 'Error API' kosong tapi tetap ❌ di kolom 14 Hari "
-                        "atau 30 Hari, berarti memang belum ada shock dip beneran saat ini (bukan bug) — item cuma "
-                        "turun dalam konteks jangka pendek, tapi belum memecahkan rekor terendah 14 ATAU 30 hari."
-                    )
-                    st.dataframe(pd.DataFrame(log_diagnostik), use_container_width=True)
-            else:
-                st.info("💡 Tidak ada kandidat yang sedang anjlok untuk diverifikasi saat ini.")
+        if not res_kandidat.empty:
+            res_kandidat_display = res_kandidat.rename(columns={
+                'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Daily_Low': 'AvgLow (24 Jam)',
+                'Beli_Berapa_Biji': 'Jml Beli', 'Total_Untung_Slot': 'Pr. Untung',
+                'ROI_Persen': 'ROI (%)', 'D_VolLow': 'Vol Harian',
+                'Batas_Beli_Maks': 'Maks Beli (BEP)', 'Tanda_Ruang_Naik': 'Status Harga'
+            })
+            st.dataframe(
+                res_kandidat_display[['Nama Barang', 'Tipe', 'Harga Beli', 'Maks Beli (BEP)', 'Status Harga', 'AvgLow (24 Jam)', 'Jml Beli', 'Pr. Untung', 'ROI (%)', 'Vol Harian']],
+                use_container_width=True
+            )
         else:
-            st.info("🔕 Verifikasi shock dip sedang dimatikan. Aktifkan di sidebar untuk memfilter dip palsu (bekas spike) menggunakan histori harga 14/30 hari.")
+            st.info("💡 Tidak ada item yang sedang di bawah rata-rata 24 jam-nya saat ini (atau semua di bawah ambang profit minimum di sidebar).")
 
         st.divider()
 
