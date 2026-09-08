@@ -6,6 +6,7 @@ import altair as alt
 import numpy as np
 import math
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Konfigurasi Tampilan Halaman Web (Responsif untuk HP)
 st.set_page_config(page_title="OSRS Global Flipping Radar", layout="wide")
@@ -191,6 +192,25 @@ if halaman == "🎯 Shock Dip Radar":
         help="Item dengan potensi untung per slot di bawah angka ini akan disaring dari tabel."
     )
 
+    st.sidebar.header("↔️ Filter High-Low Spread (Tabel 2)")
+    st.sidebar.caption("Metodologi lengkap dari poignanttech.com — Virtual Markets Part Two.")
+    min_roi_spread = st.sidebar.number_input(
+        "Min. ROI (%)", min_value=0.0, value=4.0, step=0.5,
+        help="Sesuai artikel aslinya: ROI di bawah ini disaring, karena margin-nya terlalu tipis relatif ke modal."
+    )
+    min_profit_spread = st.sidebar.number_input(
+        "Min. Profit Harian Disesuaikan (GP)", min_value=0, value=20000, step=5000,
+        help="'AdjustedPotentialDailyProfit' — proyeksi profit HARIAN kalau kamu jual-beli sampai batas limit/volume. Item di bawah ini disaring."
+    )
+    min_vol_spread = st.sidebar.number_input(
+        "Min. Volume per Jam (kedua sisi)", min_value=0, value=4, step=1,
+        help="Sesuai artikel: item dengan volume Low ATAU High di bawah ini per jam dianggap terlalu tipis buat ditradingkan."
+    )
+    max_kandidat_spread = st.sidebar.number_input(
+        "Maks. Kandidat Verifikasi Bulanan", min_value=5, max_value=100, value=30, step=5,
+        help="Tabel 2 memverifikasi kandidat teratas terhadap data bulanan (30 hari) & harian (24 jam) via API timeseries -- dibatasi supaya scan tetap cepat. Diproses paralel."
+    )
+
     st.sidebar.caption("💡 Data di-cache 60 detik — klik tombol di bawah kapan pun kamu mau data terbaru.")
 
     if st.sidebar.button("🔄 Refresh Sekarang"):
@@ -202,7 +222,73 @@ if halaman == "🎯 Shock Dip Radar":
         master_data = fetch_market_data()
 
     if not master_data.empty:
-    
+
+        # ==========================================
+        # VERIFIKASI BULANAN & HARIAN untuk Tabel 2 (High-Low Spread)
+        # Metodologi: poignanttech.com "Virtual Markets Part Two". Butuh data
+        # yang TIDAK ada di scan borongan (mapping/1h/24h/latest): rata-rata,
+        # median, & maksimum harga/volume selama 30 hari (dari timeseries 24h)
+        # dan median volume PER JAM selama 24 jam terakhir (dari timeseries 1h).
+        # Dipanggil paralel (lihat ThreadPoolExecutor di bawah) supaya cepat.
+        # ==========================================
+        @st.cache_data(ttl=600)
+        def fetch_spread_monthly_stats(item_id):
+            headers = {'User-Agent': 'Belajar_Data_Analisis_Bot_Lokal'}
+            hasil = {
+                'monthly_mean_vol_low': 0, 'monthly_mean_vol_high': 0,
+                'monthly_median_vol_low': 0, 'monthly_median_vol_high': 0,
+                'monthly_max_high': None, 'monthly_max_low': None,
+                'granular_daily_median_vol_low': 0, 'granular_daily_median_vol_high': 0,
+                'error': None
+            }
+            errors = []
+            num_cols = ['avgHighPrice', 'avgLowPrice', 'highPriceVolume', 'lowPriceVolume']
+
+            # --- 30 hari terakhir, granularitas harian (Monthly stats) ---
+            try:
+                url_24h = f"https://prices.runescape.wiki/api/v1/osrs/timeseries?timestep=24h&id={item_id}"
+                resp = requests.get(url_24h, headers=headers, timeout=15)
+                resp.raise_for_status()
+                data = resp.json().get('data', [])
+                if data:
+                    df30 = pd.DataFrame(data).tail(30)
+                    for c in num_cols:
+                        if c in df30.columns:
+                            df30[c] = pd.to_numeric(df30[c], errors='coerce')
+                    hasil['monthly_mean_vol_low'] = float(df30['lowPriceVolume'].mean(skipna=True) or 0) if 'lowPriceVolume' in df30 else 0
+                    hasil['monthly_mean_vol_high'] = float(df30['highPriceVolume'].mean(skipna=True) or 0) if 'highPriceVolume' in df30 else 0
+                    hasil['monthly_median_vol_low'] = float(df30['lowPriceVolume'].median(skipna=True) or 0) if 'lowPriceVolume' in df30 else 0
+                    hasil['monthly_median_vol_high'] = float(df30['highPriceVolume'].median(skipna=True) or 0) if 'highPriceVolume' in df30 else 0
+                    if 'avgHighPrice' in df30 and df30['avgHighPrice'].notna().any():
+                        hasil['monthly_max_high'] = float(df30['avgHighPrice'].max(skipna=True))
+                    if 'avgLowPrice' in df30 and df30['avgLowPrice'].notna().any():
+                        hasil['monthly_max_low'] = float(df30['avgLowPrice'].max(skipna=True))
+                else:
+                    errors.append("24h: respons API kosong")
+            except Exception as e:
+                errors.append(f"24h: {type(e).__name__}")
+
+            # --- 24 jam terakhir, granularitas per jam (Granular Daily Median Volume) ---
+            try:
+                url_1h = f"https://prices.runescape.wiki/api/v1/osrs/timeseries?timestep=1h&id={item_id}"
+                resp = requests.get(url_1h, headers=headers, timeout=15)
+                resp.raise_for_status()
+                data = resp.json().get('data', [])
+                if data:
+                    df1 = pd.DataFrame(data).tail(24)
+                    for c in num_cols:
+                        if c in df1.columns:
+                            df1[c] = pd.to_numeric(df1[c], errors='coerce')
+                    hasil['granular_daily_median_vol_low'] = float(df1['lowPriceVolume'].median(skipna=True) or 0) if 'lowPriceVolume' in df1 else 0
+                    hasil['granular_daily_median_vol_high'] = float(df1['highPriceVolume'].median(skipna=True) or 0) if 'highPriceVolume' in df1 else 0
+                else:
+                    errors.append("1h: respons API kosong")
+            except Exception as e:
+                errors.append(f"1h: {type(e).__name__}")
+
+            hasil['error'] = "; ".join(errors) if errors else None
+            return hasil
+
         def apply_safety_lock(df, kolom_jual='Hourly_Low'):
             def safe_calc_qty(row):
                 price = row['Live_Low']
@@ -282,6 +368,138 @@ if halaman == "🎯 Shock Dip Radar":
             )
         else:
             st.info("💡 Tidak ada item yang sedang di bawah rata-rata 24 jam-nya saat ini (atau semua di bawah ambang profit minimum di sidebar).")
+
+        st.divider()
+
+        # ==========================================
+        # TABEL 2: HIGH-LOW SPREAD (Metodologi Lengkap)
+        # Metodologi: poignanttech.com "Virtual Markets, Part Two: Market
+        # Fundamentals and the High-Low Spread". Beda dari Tabel 1 (berbasis
+        # dip vs rata-rata 24 jam), tabel ini fokus ke celah Low-High yang
+        # SELALU ada di item itu (bukan cuma pas lagi anjlok), disaring lewat
+        # 8 langkah: spread, volume, pajak, buy limit, ROI, anti-manipulasi
+        # RWT (real-world trading), likuiditas bulanan, & filter preferensi.
+        # ==========================================
+        st.subheader("↔️ Tabel 2: High-Low Spread")
+        st.write(
+            "Item dengan celah Low-High yang konsisten menguntungkan — mengikuti metodologi lengkap "
+            "[Virtual Markets Part Two](https://poignanttech.com/2024/03/01/virtual-markets-part-two-market-fundamentals-and-the-high-low-spread/) "
+            "dari poignanttech.com, termasuk filter anti barang 'zombie' (dipakai buat real-world trading) "
+            "dan cek likuiditas bulanan — bukan cuma spread mentah yang gampang menipu."
+        )
+
+        # --- Stage 1: Filter cepat pakai data borongan (tanpa API tambahan) ---
+        df_spread = master_data[
+            (master_data['Hourly_Low'] > 0) &
+            (master_data['Hourly_High'] > 0) &
+            (master_data['H_VolLow'] > min_vol_spread) &
+            (master_data['H_VolHigh'] > min_vol_spread)
+        ].copy()
+
+        if not df_spread.empty:
+            df_spread['Tax_Spread'] = df_spread['Hourly_High'].apply(calc_ge_tax)
+            df_spread['Untung_Per_Biji'] = df_spread['Hourly_High'] - df_spread['Hourly_Low'] - df_spread['Tax_Spread']
+            df_spread = df_spread[df_spread['Untung_Per_Biji'] > 0]
+
+            # Cek real-time (/latest) juga masih menunjukkan profit positif SEKARANG,
+            # bukan cuma berdasarkan rata-rata 1 jam yang mungkin sudah basi
+            df_spread['Tax_Live'] = df_spread['Live_High'].apply(calc_ge_tax)
+            df_spread = df_spread[(df_spread['Live_High'] - df_spread['Live_Low'] - df_spread['Tax_Live']) > 0]
+
+            df_spread['ROI_Persen'] = (df_spread['Untung_Per_Biji'] / df_spread['Hourly_Low']) * 100
+
+            # AdjustedPotentialDailyProfit = MIN(profit tanpa batas limit, profit dengan batas limit)
+            df_spread['NoBuyLimitProfit'] = df_spread['Untung_Per_Biji'] * 24 * df_spread[['H_VolLow', 'H_VolHigh']].min(axis=1)
+            df_spread['WithBuyLimitProfit'] = df_spread.apply(
+                lambda r: r['Untung_Per_Biji'] * r['mappinglimit'] if r['mappinglimit'] > 0 else np.inf, axis=1
+            )
+            df_spread['AdjustedPotentialDailyProfit'] = df_spread[['NoBuyLimitProfit', 'WithBuyLimitProfit']].min(axis=1)
+
+            df_spread = df_spread[
+                (df_spread['ROI_Persen'] > min_roi_spread) &
+                (df_spread['AdjustedPotentialDailyProfit'] > min_profit_spread)
+            ].sort_values(by='AdjustedPotentialDailyProfit', ascending=False)
+        
+        if df_spread.empty:
+            st.info("💡 Tidak ada item yang lolos filter awal spread/ROI/profit di sidebar saat ini.")
+        else:
+            # --- Stage 2: Verifikasi bulanan & harian (API per item, PARALEL) ---
+            kandidat_spread = df_spread.head(int(max_kandidat_spread))
+            hasil_final = []
+            log_diagnostik_spread = []
+            total_kandidat_spread = len(kandidat_spread)
+            progress_spread = st.progress(0, text="Memverifikasi likuiditas bulanan Tabel 2...")
+
+            selesai_spread = 0
+            with ThreadPoolExecutor(max_workers=12) as executor:
+                future_ke_row = {executor.submit(fetch_spread_monthly_stats, int(row['id'])): row for _, row in kandidat_spread.iterrows()}
+                for future in as_completed(future_ke_row):
+                    row = future_ke_row[future]
+                    m = future.result()
+                    selesai_spread += 1
+                    progress_spread.progress(
+                        selesai_spread / total_kandidat_spread,
+                        text=f"Memverifikasi {row['mappingname']} ({selesai_spread}/{total_kandidat_spread})..."
+                    )
+
+                    # Anti-manipulasi RWT: High-Low gak boleh pernah kebalik parah selama 30 hari
+                    lolos_anti_inversi = (
+                        m['monthly_max_high'] is not None and m['monthly_max_low'] is not None and
+                        m['monthly_max_high'] > m['monthly_max_low']
+                    )
+                    # Likuiditas bulanan & harian harus konsisten ada, bukan cuma sesekali
+                    lolos_likuiditas_bulanan = (
+                        m['monthly_median_vol_low'] > 0 and m['monthly_median_vol_high'] > 0 and
+                        m['granular_daily_median_vol_low'] > 0 and m['granular_daily_median_vol_high'] > 0
+                    )
+                    # Anti-shock: volume 1 jam sekarang gak boleh lebih dari 2x rata-rata bulanan
+                    # (menyaring item yang tiba-tiba viral/dimanipulasi, bukan yang likuid wajar)
+                    total_bulanan = m['monthly_mean_vol_low'] + m['monthly_mean_vol_high']
+                    total_granular = row['H_VolLow'] + row['H_VolHigh']
+                    lolos_anti_shock = total_bulanan > (12 * total_granular)
+
+                    lolos_semua = lolos_anti_inversi and lolos_likuiditas_bulanan and lolos_anti_shock
+
+                    log_diagnostik_spread.append({
+                        'Nama Barang': row['mappingname'],
+                        'Max High Bulanan': round(m['monthly_max_high']) if m['monthly_max_high'] is not None else None,
+                        'Max Low Bulanan': round(m['monthly_max_low']) if m['monthly_max_low'] is not None else None,
+                        'Anti-Inversi?': '✅' if lolos_anti_inversi else '❌',
+                        'Likuid Bulanan?': '✅' if lolos_likuiditas_bulanan else '❌',
+                        'Anti-Shock?': '✅' if lolos_anti_shock else '❌',
+                        'Status': '🟢 LOLOS' if lolos_semua else '⛔ Gagal',
+                        'Error API': m['error'] if m['error'] else '-'
+                    })
+
+                    if lolos_semua:
+                        hasil_final.append(row)
+
+            progress_spread.empty()
+
+            if hasil_final:
+                df_final_spread = pd.DataFrame(hasil_final).sort_values(by='AdjustedPotentialDailyProfit', ascending=False)
+                df_final_spread['Modal Dibutuhkan (Full Limit)'] = df_final_spread['Live_Low'] * df_final_spread['mappinglimit']
+                df_final_spread_display = df_final_spread.rename(columns={
+                    'mappingname': 'Nama Barang', 'Hourly_Low': 'Harga Beli', 'Hourly_High': 'Harga Jual',
+                    'mappinglimit': 'Limit Beli', 'ROI_Persen': 'ROI (%)',
+                    'AdjustedPotentialDailyProfit': 'Profit Harian Disesuaikan'
+                })
+                st.success(f"✅ {len(df_final_spread_display)} item lolos verifikasi High-Low Spread lengkap!")
+                st.dataframe(
+                    df_final_spread_display[['Nama Barang', 'Tipe', 'Harga Beli', 'Harga Jual', 'Limit Beli',
+                                              'Modal Dibutuhkan (Full Limit)', 'Profit Harian Disesuaikan', 'ROI (%)']],
+                    use_container_width=True
+                )
+            else:
+                st.info("💡 Tidak ada kandidat yang lolos verifikasi bulanan/harian saat ini. Coba turunkan ambang di sidebar, atau naikkan 'Maks. Kandidat Verifikasi Bulanan'.")
+
+            with st.expander(f"🔍 Detail Diagnostik Tabel 2 ({total_kandidat_spread} kandidat diperiksa)"):
+                st.caption(
+                    "Kalau 'Error API' terisi, tabel kosong karena masalah koneksi — coba lagi. Kalau kosong "
+                    "tapi tetap ❌, item itu memang gagal salah satu syarat likuiditas/anti-manipulasi bulanan "
+                    "dari metodologi artikel — bukan bug."
+                )
+                st.dataframe(pd.DataFrame(log_diagnostik_spread), use_container_width=True)
 
         st.divider()
 
