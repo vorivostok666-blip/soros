@@ -166,31 +166,37 @@ if halaman == "🎯 Shock Dip Radar":
     st.sidebar.header("🛡️ Filter Shock Dip Detection (Tabel 1)")
     st.sidebar.caption("Metodologi lengkap dari poignanttech.com — Virtual Markets Part Four.")
     min_profit_total = st.sidebar.number_input(
-        "Min. Profit Harian Disesuaikan (GP)", min_value=0, value=20000, step=5000,
-        help="'AdjustedPotentialDailyProfit' — proyeksi profit HARIAN kalau kamu jual-beli sampai batas limit/volume. Item di bawah ini disaring."
+        "Min. Profit Harian Disesuaikan — Tabel 1 (GP)", min_value=0, value=20000, step=5000,
+        help="'AdjustedPotentialDailyProfit' — proyeksi profit HARIAN kalau kamu jual-beli sampai batas limit/volume. Item di bawah ini disaring.",
+        key="min_profit_tabel1"
     )
     max_kandidat_dip = st.sidebar.number_input(
         "Maks. Kandidat Verifikasi 14/30 Hari", min_value=5, max_value=100, value=30, step=5,
-        help="Tabel 1 memverifikasi kandidat teratas terhadap floor 14 & 30 hari via API timeseries -- dibatasi supaya scan tetap cepat. Diproses paralel."
+        help="Tabel 1 memverifikasi kandidat teratas terhadap floor 14 & 30 hari via API timeseries -- dibatasi supaya scan tetap cepat. Diproses paralel.",
+        key="max_kandidat_tabel1"
     )
 
     st.sidebar.header("↔️ Filter High-Low Spread (Tabel 2)")
     st.sidebar.caption("Metodologi lengkap dari poignanttech.com — Virtual Markets Part Two.")
     min_roi_spread = st.sidebar.number_input(
         "Min. ROI (%)", min_value=0.0, value=4.0, step=0.5,
-        help="Sesuai artikel aslinya: ROI di bawah ini disaring, karena margin-nya terlalu tipis relatif ke modal."
+        help="Sesuai artikel aslinya: ROI di bawah ini disaring, karena margin-nya terlalu tipis relatif ke modal.",
+        key="min_roi_tabel2"
     )
     min_profit_spread = st.sidebar.number_input(
-        "Min. Profit Harian Disesuaikan (GP)", min_value=0, value=20000, step=5000,
-        help="'AdjustedPotentialDailyProfit' — proyeksi profit HARIAN kalau kamu jual-beli sampai batas limit/volume. Item di bawah ini disaring."
+        "Min. Profit Harian Disesuaikan — Tabel 2 (GP)", min_value=0, value=20000, step=5000,
+        help="'AdjustedPotentialDailyProfit' — proyeksi profit HARIAN kalau kamu jual-beli sampai batas limit/volume. Item di bawah ini disaring.",
+        key="min_profit_tabel2"
     )
     min_vol_spread = st.sidebar.number_input(
         "Min. Volume per Jam (kedua sisi)", min_value=0, value=4, step=1,
-        help="Sesuai artikel: item dengan volume Low ATAU High di bawah ini per jam dianggap terlalu tipis buat ditradingkan."
+        help="Sesuai artikel: item dengan volume Low ATAU High di bawah ini per jam dianggap terlalu tipis buat ditradingkan.",
+        key="min_vol_tabel2"
     )
     max_kandidat_spread = st.sidebar.number_input(
         "Maks. Kandidat Verifikasi Bulanan", min_value=5, max_value=100, value=30, step=5,
-        help="Tabel 2 memverifikasi kandidat teratas terhadap data bulanan (30 hari) & harian (24 jam) via API timeseries -- dibatasi supaya scan tetap cepat. Diproses paralel."
+        help="Tabel 2 memverifikasi kandidat teratas terhadap data bulanan (30 hari) & harian (24 jam) via API timeseries -- dibatasi supaya scan tetap cepat. Diproses paralel.",
+        key="max_kandidat_tabel2"
     )
 
     st.sidebar.caption("💡 Data di-cache 60 detik — klik tombol di bawah kapan pun kamu mau data terbaru.")
