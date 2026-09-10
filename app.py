@@ -396,14 +396,31 @@ if halaman == "🎯 Shock Dip Radar":
 
             if hasil_final_dip:
                 df_verified = pd.DataFrame(hasil_final_dip).sort_values(by='AdjustedPotentialDailyProfit', ascending=False)
+                df_verified['Vol per Jam'] = df_verified['H_VolLow'] + df_verified['H_VolHigh']
+                df_verified['Vol Harian'] = df_verified['D_VolLow'] + df_verified['D_VolHigh']
+
+                # --- Tandai item BARU (belum ada di scan sebelumnya) ---
+                # Disimpan di session_state supaya "ingat" antar refresh manual.
+                # Scan pertama kali di sesi ini sengaja TIDAK menandai apa pun sebagai
+                # baru (belum ada pembanding), baru mulai menandai dari refresh ke-2.
+                if 'tabel1_item_sebelumnya' not in st.session_state:
+                    st.session_state['tabel1_item_sebelumnya'] = set()
+                id_sebelumnya = st.session_state['tabel1_item_sebelumnya']
+                df_verified['Baru?'] = df_verified['id'].apply(
+                    lambda x: '🆕 Baru' if (id_sebelumnya and x not in id_sebelumnya) else ''
+                )
+                st.session_state['tabel1_item_sebelumnya'] = set(df_verified['id'].tolist())
+
                 df_verified_display = df_verified.rename(columns={
                     'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'mappinglimit': 'Limit Beli',
                     'ProfitPerUnit': 'Untung/Biji', 'pctROI': 'ROI (%)',
                     'AdjustedPotentialDailyProfit': 'Profit Harian Disesuaikan'
                 })
-                st.success(f"✅ {len(df_verified_display)} item lolos verifikasi shock dip 14 & 30 hari!")
+                jumlah_baru = (df_verified_display['Baru?'] == '🆕 Baru').sum()
+                pesan_baru = f" ({jumlah_baru} item baru muncul sejak scan sebelumnya!)" if jumlah_baru > 0 else ""
+                st.success(f"✅ {len(df_verified_display)} item lolos verifikasi shock dip 14 & 30 hari!{pesan_baru}")
                 st.dataframe(
-                    df_verified_display[['Nama Barang', 'Tipe', 'Harga Beli', 'Limit Beli', 'Untung/Biji', 'ROI (%)', 'Profit Harian Disesuaikan']],
+                    df_verified_display[['Baru?', 'Nama Barang', 'Tipe', 'Harga Beli', 'Vol per Jam', 'Vol Harian', 'Limit Beli', 'Untung/Biji', 'ROI (%)', 'Profit Harian Disesuaikan']],
                     use_container_width=True
                 )
             else:
