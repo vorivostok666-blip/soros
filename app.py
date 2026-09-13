@@ -7,6 +7,7 @@ import numpy as np
 import math
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from streamlit_autorefresh import st_autorefresh
 
 # Konfigurasi Tampilan Halaman Web (Responsif untuk HP)
 st.set_page_config(page_title="OSRS Global Flipping Radar", layout="wide")
@@ -199,7 +200,20 @@ if halaman == "🎯 Shock Dip Radar":
         key="max_kandidat_tabel2"
     )
 
-    st.sidebar.caption("💡 Data di-cache 60 detik — klik tombol di bawah kapan pun kamu mau data terbaru.")
+    st.sidebar.header("🔄 Refresh Data")
+    st.sidebar.caption("Data di-cache 60 detik di balik layar. Nyalakan auto-refresh kalau sedang mantengin nunggu dip; matikan kalau lagi baca-baca santai.")
+    aktifkan_auto_refresh = st.sidebar.checkbox(
+        "Aktifkan Auto-Refresh", value=False,
+        help="Kalau aktif, app otomatis ambil data baru tiap interval yang kamu atur -- tanpa perlu klik manual. Pilihan/scroll kamu TIDAK ikut ke-reset.",
+        key="toggle_auto_refresh"
+    )
+    if aktifkan_auto_refresh:
+        interval_refresh = st.sidebar.number_input(
+            "Interval Auto-Refresh (detik)", min_value=30, max_value=300, value=60, step=10,
+            help="Minimal 30 detik -- di bawah itu percuma, karena data di balik layar cuma di-cache ulang tiap 60 detik.",
+            key="interval_auto_refresh"
+        )
+        st_autorefresh(interval=int(interval_refresh) * 1000, key="dip_auto_refresh")
 
     if st.sidebar.button("🔄 Refresh Sekarang"):
         fetch_market_data.clear()
