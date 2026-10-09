@@ -200,6 +200,18 @@ if halaman == "🎯 Shock Dip Radar":
         key="max_kandidat_tabel2"
     )
 
+    st.sidebar.header("📊 Filter Lonjakan Volume (Tabel 3)")
+    min_rasio_lonjakan = st.sidebar.number_input(
+        "Min. Rasio Lonjakan (x normal)", min_value=1.0, value=2.0, step=0.5,
+        help="Item dengan volume 1 jam terakhir di bawah X kali rata-rata per jam (dari data 24 jam) akan disaring.",
+        key="min_rasio_lonjakan"
+    )
+    min_vol_absolut = st.sidebar.number_input(
+        "Min. Volume Absolut per Jam", min_value=0, value=5, step=5,
+        help="Buang item yang volumenya emang selalu kecil (lonjakan dari 1 ke 3 transaksi bukan sinyal berarti).",
+        key="min_vol_absolut_tabel3"
+    )
+
     st.sidebar.header("🔄 Refresh Data")
     st.sidebar.caption("Data di-cache 60 detik di balik layar. Nyalakan auto-refresh kalau sedang mantengin nunggu dip; matikan kalau lagi baca-baca santai.")
     aktifkan_auto_refresh = st.sidebar.checkbox(
@@ -579,6 +591,68 @@ if halaman == "🎯 Shock Dip Radar":
                     "dari metodologi artikel — bukan bug."
                 )
                 st.dataframe(pd.DataFrame(log_diagnostik_spread), use_container_width=True)
+
+        st.divider()
+
+        # ==========================================
+        # TABEL 3: LONJAKAN VOLUME
+        # Beda fokus dari Tabel 1 (harga anjlok) & Tabel 2 (spread konsisten):
+        # ini murni nyari item yang AKTIVITAS TRANSAKSINYA tiba-tiba ramai
+        # dibanding biasanya -- mau harganya lagi naik, turun, atau belum
+        # bergerak sama sekali. Lonjakan volume sering jadi "radar awal"
+        # sebelum harga ikutan bergerak, jadi berguna buat investigasi lanjut.
+        # Dihitung dari data borongan saja (H_Vol vs D_Vol/24 sebagai
+        # baseline) -- TIDAK ada panggilan API tambahan, jadi instan.
+        # ==========================================
+        st.subheader("📊 Tabel 3: Lonjakan Volume")
+        st.write(
+            "Item yang volume transaksi 1 jam terakhirnya jauh di atas kebiasaan hariannya — "
+            "sinyal ada sesuatu yang sedang terjadi (borongan beli, dump jual, atau cuma rame biasa). "
+            "Cek kolom **Arah Harga** buat tau itu lagi dibeli borongan (naik) atau dijual borongan (turun)."
+        )
+
+        df_lonjakan = master_data[
+            (master_data['D_VolLow'] + master_data['D_VolHigh'] > 0) &
+            (master_data['Live_Low'] > 0)
+        ].copy()
+
+        if not df_lonjakan.empty:
+            df_lonjakan['Vol_Perjam_Sekarang'] = df_lonjakan['H_VolLow'] + df_lonjakan['H_VolHigh']
+            df_lonjakan['Vol_Baseline_Perjam'] = (df_lonjakan['D_VolLow'] + df_lonjakan['D_VolHigh']) / 24
+            df_lonjakan = df_lonjakan[df_lonjakan['Vol_Perjam_Sekarang'] >= min_vol_absolut]
+            df_lonjakan['Rasio_Lonjakan'] = df_lonjakan.apply(
+                lambda r: (r['Vol_Perjam_Sekarang'] / r['Vol_Baseline_Perjam']) if r['Vol_Baseline_Perjam'] > 0 else None,
+                axis=1
+            )
+            df_lonjakan = df_lonjakan[
+                df_lonjakan['Rasio_Lonjakan'].notna() & (df_lonjakan['Rasio_Lonjakan'] >= min_rasio_lonjakan)
+            ].sort_values(by='Rasio_Lonjakan', ascending=False)
+
+            def arah_harga(row):
+                if row['Hourly_Low'] <= 0:
+                    return '❓ N/A'
+                selisih_persen = ((row['Live_Low'] - row['Hourly_Low']) / row['Hourly_Low']) * 100
+                if selisih_persen >= 1:
+                    return '📈 Naik'
+                elif selisih_persen <= -1:
+                    return '📉 Turun'
+                else:
+                    return '➖ Stabil'
+            df_lonjakan['Arah Harga'] = df_lonjakan.apply(arah_harga, axis=1)
+            df_lonjakan['Rasio_Lonjakan'] = df_lonjakan['Rasio_Lonjakan'].round(1)
+            df_lonjakan['Vol_Perjam_Sekarang'] = df_lonjakan['Vol_Perjam_Sekarang'].round().astype(int)
+
+        if df_lonjakan.empty:
+            st.info("💡 Tidak ada item dengan lonjakan volume signifikan saat ini (coba turunkan ambang di sidebar).")
+        else:
+            df_lonjakan_display = df_lonjakan.rename(columns={
+                'mappingname': 'Nama Barang', 'Live_Low': 'Harga Beli', 'Live_High': 'Harga Jual',
+                'Vol_Perjam_Sekarang': 'Vol/Jam Sekarang', 'Rasio_Lonjakan': 'Rasio Lonjakan'
+            })
+            st.dataframe(
+                df_lonjakan_display[['Nama Barang', 'Tipe', 'Harga Beli', 'Harga Jual', 'Vol/Jam Sekarang', 'Rasio Lonjakan', 'Arah Harga']],
+                use_container_width=True
+            )
 
         st.divider()
 
